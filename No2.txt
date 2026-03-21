@@ -1,0 +1,241 @@
+========================================
+REAL-TIME REDDIT TRACKING SYSTEM SPEC
+========================================
+
+1. OVERVIEW
+----------------------------------------
+Hệ thống là một crawler realtime dùng để:
+- Theo dõi bài viết mới trên Reddit
+- Cập nhật liên tục score và số comment
+- Duy trì một cửa sổ dữ liệu cố định (sliding window)
+
+Mục tiêu:
+- Mô phỏng hệ thống streaming dữ liệu
+- Phục vụ phân tích realtime (AI, dashboard, analytics)
+
+----------------------------------------
+
+2. SYSTEM ARCHITECTURE
+----------------------------------------
+
+[Reddit API (.json)]
+        ↓
+[Fetcher]
+        ↓
+[Formatter]
+        ↓
+[MongoDB Storage]
+        ↓
+[Updater Loop]
+        ↓
+[Sliding Window Manager]
+
+----------------------------------------
+
+3. CONFIGURATION
+----------------------------------------
+
+SUBREDDIT:
+- Chủ đề cần theo dõi (ví dụ: technology)
+
+WINDOW_SIZE:
+- Số lượng bài viết tối đa lưu trong DB (ví dụ: 500)
+
+UPDATE_INTERVAL:
+- Chu kỳ cập nhật (giây)
+- Ví dụ: 60s = mỗi 1 phút
+
+----------------------------------------
+
+4. COMPONENTS
+----------------------------------------
+
+4.1 MongoDB Layer
+- Database: reddit_db
+- Collection: realtime_posts
+
+Index:
+- id (unique)
+
+Mục đích:
+- Tránh trùng dữ liệu
+- Tăng tốc truy vấn
+
+----------------------------------------
+
+4.2 Fetcher (fetch_new_posts)
+
+Chức năng:
+- Gọi API Reddit:
+  https://www.reddit.com/r/{subreddit}/new.json
+
+Output:
+- Danh sách bài viết mới
+
+Xử lý lỗi:
+- HTTP != 200 → bỏ qua
+- Exception → return []
+
+----------------------------------------
+
+4.3 Formatter (format_post)
+
+Chuyển JSON → document MongoDB
+
+Fields:
+- id: ID bài viết
+- subreddit: tên subreddit
+- title: tiêu đề
+- content: nội dung
+- score: điểm vote
+- num_comments: số comment
+- created_utc: thời gian tạo
+- updated_at: thời gian cập nhật gần nhất
+- payload: full JSON gốc
+
+----------------------------------------
+
+4.4 Init Load (init_load)
+
+Chức năng:
+- Load dữ liệu ban đầu
+
+Cơ chế:
+- Fetch posts mới
+- Insert vào DB
+- Dừng khi đạt WINDOW_SIZE
+
+----------------------------------------
+
+4.5 Update Existing Posts (update_existing_posts)
+
+Chức năng:
+- Cập nhật score + comment
+
+Cơ chế:
+- Lấy danh sách id trong DB
+- Gọi API:
+  https://www.reddit.com/comments/{id}.json
+
+- Update:
+    score
+    num_comments
+    updated_at
+
+----------------------------------------
+
+4.6 Add New Posts (add_new_posts)
+
+Chức năng:
+- Thêm bài viết mới vào DB
+
+Cơ chế:
+- Fetch posts mới
+- Check id đã tồn tại chưa
+- Nếu chưa → insert
+
+----------------------------------------
+
+4.7 Sliding Window (enforce_window)
+
+Chức năng:
+- Giữ số lượng document <= WINDOW_SIZE
+
+Cơ chế:
+- Nếu vượt:
+    → sort theo created_utc tăng dần
+    → xóa bài cũ nhất
+
+----------------------------------------
+
+5. WORKFLOW
+----------------------------------------
+
+Bước 1: Start chương trình
+Bước 2: Kết nối MongoDB
+Bước 3: Nếu DB rỗng → init_load()
+
+Bước 4: Loop vô hạn:
+
+    UPDATE CYCLE:
+
+    1. update_existing_posts()
+    2. add_new_posts()
+    3. enforce_window()
+
+    4. In tổng số bài
+    5. Sleep UPDATE_INTERVAL
+
+----------------------------------------
+
+6. DATA FLOW
+----------------------------------------
+
+Reddit → Fetch → Format → MongoDB
+MongoDB → Update → MongoDB
+MongoDB → Clean → MongoDB
+
+----------------------------------------
+
+7. ERROR HANDLING
+----------------------------------------
+
+HTTP error:
+- Bỏ qua request
+
+Duplicate key:
+- Bỏ qua insert
+
+Network error:
+- Catch exception và continue
+
+----------------------------------------
+
+8. PERFORMANCE CHARACTERISTICS
+----------------------------------------
+
+Time Complexity:
+- O(n) mỗi cycle
+
+Network Bound:
+- Phụ thuộc tốc độ API Reddit
+
+DB Operations:
+- insert_one
+- update_one
+- delete_many
+
+----------------------------------------
+
+9. FEATURES
+----------------------------------------
+
+- Realtime data tracking
+- Sliding window (fixed size)
+- Auto update score/comment
+- Không trùng dữ liệu
+- Tự động thêm/xóa data
+
+----------------------------------------
+
+10. USE CASES
+----------------------------------------
+
+- Dashboard realtime Reddit
+- Tracking trending posts
+- Sentiment analysis realtime
+- Data pipeline streaming
+
+----------------------------------------
+
+11. SUMMARY
+----------------------------------------
+
+Hệ thống là một crawler realtime sử dụng polling định kỳ 
+để lấy dữ liệu từ Reddit, cập nhật trạng thái bài viết và 
+duy trì một sliding window trong MongoDB nhằm đảm bảo dữ 
+liệu luôn mới và có kích thước cố định.
+
+========================================
+END OF DOCUMENT
+========================================

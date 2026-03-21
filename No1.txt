@@ -1,0 +1,190 @@
+===============================
+REDDIT CRAWLER SYSTEM SPECIFICATION
+===============================
+
+1. OVERVIEW
+-----------
+Hệ thống là một crawler bất đồng bộ (asynchronous crawler) dùng để thu thập dữ liệu từ Reddit thông qua JSON endpoint và lưu vào MongoDB.
+
+Mục tiêu:
+- Thu thập bài viết từ nhiều subreddit
+- Lưu trữ dữ liệu phục vụ phân tích (NLP, AI, thống kê)
+
+-------------------------------
+
+2. SYSTEM ARCHITECTURE
+-------------------------------
+[Config File]
+      ↓
+[Async Worker Loop]
+      ↓
+[HTTP Request → Reddit JSON]
+      ↓
+[Parse Data]
+      ↓
+[Save MongoDB]
+
+-------------------------------
+
+3. MAIN COMPONENTS
+-------------------------------
+
+3.1 Config Loader
+- Đọc file cấu hình (.properties)
+- Cho phép thay đổi tham số runtime
+
+Input:
+- subreddits
+- target_posts
+- delay
+- mongo_uri
+
+Output:
+- Dictionary config
+
+-------------------------------
+
+3.2 Async Worker
+- Chạy vòng lặp chính của hệ thống
+- Sử dụng asyncio để chạy nhiều request đồng thời
+- Giới hạn số request bằng Semaphore
+
+-------------------------------
+
+3.3 HTTP Fetch (Crawler Engine)
+- Gửi request đến Reddit:
+  https://www.reddit.com/r/{subreddit}/new.json
+
+- Có User-Agent giả để tránh bị block
+
+-------------------------------
+
+3.4 Pagination
+- Reddit trả về trường "after"
+- Dùng để lấy batch dữ liệu tiếp theo
+
+Ví dụ:
+- Request 1 → after = abc
+- Request 2 → dùng after=abc
+
+Giúp:
+- Không bị lặp dữ liệu
+- Crawl được số lượng lớn (>10k)
+
+-------------------------------
+
+3.5 Data Processing
+- Parse JSON thành dữ liệu có cấu trúc
+
+Fields:
+- id: ID bài viết
+- subreddit: tên subreddit
+- title: tiêu đề
+- content: nội dung
+- score: điểm vote
+- num_comments: số comment
+- created_utc: thời gian tạo
+
+-------------------------------
+
+3.6 Database Layer (MongoDB)
+- Lưu dữ liệu bằng cơ chế upsert
+
+Cú pháp:
+update_one(filter, data, upsert=True)
+
+Hành vi:
+- Nếu chưa tồn tại → insert
+- Nếu đã tồn tại → update
+
+Ưu điểm:
+- Tránh trùng dữ liệu
+- Đảm bảo tính toàn vẹn
+
+-------------------------------
+
+3.7 Rate Control
+- Sử dụng delay ngẫu nhiên
+- Giới hạn số request đồng thời
+
+Giúp tránh:
+- HTTP 429 (Too Many Requests)
+- HTTP 403 (Forbidden)
+
+-------------------------------
+
+4. WORKFLOW
+-------------------------------
+
+Bước 1: Load config
+Bước 2: Kết nối MongoDB
+Bước 3: Khởi tạo session async
+Bước 4: Vòng lặp:
+
+    - Gửi request
+    - Nhận dữ liệu JSON
+    - Parse dữ liệu
+    - Lưu vào MongoDB
+    - Cập nhật pagination (after)
+    - Sleep
+
+-------------------------------
+
+5. STOP CONDITION
+-------------------------------
+
+Hệ thống dừng khi:
+total_posts >= target_posts
+
+-------------------------------
+
+6. RISKS AND HANDLING
+-------------------------------
+
+403 Forbidden:
+- Nguyên nhân: bị chặn
+- Giải pháp: dùng User-Agent
+
+429 Too Many Requests:
+- Nguyên nhân: request quá nhanh
+- Giải pháp: delay + semaphore
+
+Duplicate Data:
+- Nguyên nhân: crawl trùng
+- Giải pháp: upsert
+
+Request Error:
+- Nguyên nhân: mạng hoặc server
+- Giải pháp: retry + sleep
+
+-------------------------------
+
+7. FEATURES
+-------------------------------
+
+- Asynchronous (nhanh)
+- Pagination (crawl lớn)
+- Không trùng dữ liệu
+- Config động
+- Dễ mở rộng
+
+-------------------------------
+
+8. USE CASES
+-------------------------------
+
+- Thu thập dữ liệu NLP
+- Phân tích sentiment
+- Training AI
+- Data pipeline
+
+-------------------------------
+
+9. SUMMARY
+-------------------------------
+
+Hệ thống là một crawler bất đồng bộ sử dụng asyncio để thu thập dữ liệu từ Reddit thông qua JSON endpoint, áp dụng cơ chế phân trang và kiểm soát tốc độ truy vấn, đồng thời lưu trữ dữ liệu vào MongoDB với cơ chế upsert nhằm đảm bảo tính toàn vẹn và tránh trùng lặp dữ liệu.
+
+===============================
+END OF DOCUMENT
+===============================

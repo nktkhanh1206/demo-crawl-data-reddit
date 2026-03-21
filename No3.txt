@@ -1,0 +1,233 @@
+========================================
+REDDIT REPLAY MODULE SPECIFICATION
+========================================
+
+1. OVERVIEW
+----------------------------------------
+Module Replay dùng để đọc dữ liệu đã crawl từ MongoDB 
+và phát lại (replay) theo nhiều chế độ khác nhau.
+
+Mục tiêu:
+- Mô phỏng luồng dữ liệu realtime
+- Test pipeline xử lý dữ liệu (Kafka, AI, analytics)
+- Debug và kiểm tra dữ liệu đã crawl
+
+----------------------------------------
+
+2. SYSTEM ARCHITECTURE
+----------------------------------------
+
+[MongoDB]
+     ↓
+[Data Reader]
+     ↓
+[Formatter]
+     ↓
+[Replay Engine]
+     ↓
+[Output Stream (print/log)]
+
+----------------------------------------
+
+3. CONFIGURATION
+----------------------------------------
+
+MODE:
+- fast      : phát nhanh toàn bộ dữ liệu
+- timeline  : phát theo thời gian thực (giả lập)
+- multi     : phát song song nhiều thread
+
+SPEED:
+- Tốc độ phát timeline (chia nhỏ thời gian delay)
+
+BATCH_SIZE:
+- Số document lấy mỗi lần từ MongoDB
+
+WORKERS:
+- Số thread chạy song song (multi-thread mode)
+
+----------------------------------------
+
+4. COMPONENTS
+----------------------------------------
+
+4.1 MongoDB Connection
+- Kết nối tới MongoDB local
+- Database: reddit_db
+- Collection: posts
+
+----------------------------------------
+
+4.2 Data Formatter (format_event)
+
+Chuyển dữ liệu MongoDB → Event chuẩn
+
+Input:
+- document từ MongoDB
+
+Output:
+{
+    event_type,
+    id,
+    subreddit,
+    title,
+    score,
+    num_comments,
+    created_utc,
+    timestamp
+}
+
+Mục đích:
+- Chuẩn hóa dữ liệu
+- Phục vụ stream processing
+
+----------------------------------------
+
+4.3 Event Sender (send_event)
+
+- Xuất dữ liệu ra console
+- Giả lập streaming system
+
+Output:
+📡 id | score | num_comments
+
+----------------------------------------
+
+5. REPLAY MODES
+----------------------------------------
+
+5.1 FAST REPLAY
+
+Mô tả:
+- Đọc toàn bộ dữ liệu từ MongoDB
+- Phát liên tục không delay
+
+Cơ chế:
+- Dùng cursor + batch_size
+- Loop từng document
+- Gửi event ngay lập tức
+
+Ưu điểm:
+- Rất nhanh
+- Phù hợp test throughput
+
+Nhược điểm:
+- Không mô phỏng realtime
+
+----------------------------------------
+
+5.2 TIMELINE REPLAY
+
+Mô tả:
+- Phát dữ liệu theo timeline thực
+
+Cơ chế:
+- Sort theo created_utc
+- Tính delay giữa các event:
+
+    delay = (event_time - start_time) / SPEED
+
+- Sleep trước khi phát event tiếp theo
+
+Ưu điểm:
+- Mô phỏng realtime chính xác
+- Phù hợp test streaming system
+
+Nhược điểm:
+- Chậm hơn fast mode
+
+----------------------------------------
+
+5.3 MULTI-THREAD REPLAY
+
+Mô tả:
+- Chạy nhiều thread song song
+
+Cơ chế:
+- Load toàn bộ dữ liệu vào list
+- Chia thành nhiều chunk
+- Mỗi thread xử lý một chunk
+
+chunk_size = total / WORKERS
+
+Ưu điểm:
+- Tăng tốc độ xử lý
+- Tận dụng CPU
+
+Nhược điểm:
+- Không đảm bảo thứ tự
+- Có thể conflict output
+
+----------------------------------------
+
+6. WORKFLOW
+----------------------------------------
+
+Bước 1: Start chương trình
+Bước 2: Kết nối MongoDB
+Bước 3: Kiểm tra kết nối (server_info)
+
+Bước 4: Chọn mode:
+
+    if MODE == "fast":
+        replay_fast()
+
+    if MODE == "timeline":
+        replay_timeline()
+
+    if MODE == "multi":
+        replay_multithread()
+
+Bước 5: Đọc dữ liệu → format → send
+
+----------------------------------------
+
+7. ERROR HANDLING
+----------------------------------------
+
+MongoDB connection error:
+- In ra lỗi và dừng chương trình
+
+Empty data:
+- Timeline mode sẽ báo "No data"
+
+----------------------------------------
+
+8. PERFORMANCE CHARACTERISTICS
+----------------------------------------
+
+Fast mode:
+- O(n)
+- I/O bound
+
+Timeline mode:
+- O(n)
+- Time dependent (sleep)
+
+Multi-thread mode:
+- O(n / workers)
+- CPU bound
+
+----------------------------------------
+
+9. USE CASES
+----------------------------------------
+
+- Test hệ thống streaming
+- Debug dữ liệu
+- Benchmark tốc độ xử lý
+- Demo pipeline dữ liệu
+
+----------------------------------------
+
+10. SUMMARY
+----------------------------------------
+
+Module Replay là một hệ thống phát lại dữ liệu từ MongoDB 
+theo nhiều chế độ (fast, timeline, multi-thread), giúp mô 
+phỏng luồng dữ liệu thực tế, kiểm thử hệ thống và đánh giá 
+hiệu năng xử lý dữ liệu.
+
+========================================
+END OF DOCUMENT
+========================================

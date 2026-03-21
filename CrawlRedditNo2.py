@@ -11,31 +11,28 @@ UPDATE_INTERVAL = 60  # 1 phút
 # ================= MONGO =================
 client = MongoClient("mongodb://localhost:27017/")
 db = client["reddit_db"]
-collection = db["realtime_posts"]
 
-collection.create_index("id", unique=True)
+raw_collection = db["posts_raw"]          # dữ liệu gốc
+rt_collection = db["posts_realtime"]      # dữ liệu realtime
+
+rt_collection.create_index("id", unique=True)
 
 # ================= HEADERS =================
 HEADERS = {
     "User-Agent": "Mozilla/5.0 realtime-bot/2.0"
 }
 
-# ================= FETCH NEW POSTS =================
+# ================= FETCH =================
 def fetch_new_posts():
     url = f"https://www.reddit.com/r/{SUBREDDIT}/new.json?limit=100"
 
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
-
         if res.status_code != 200:
-            print("❌ Fetch error:", res.status_code)
             return []
-
         data = res.json()
         return [p["data"] for p in data["data"]["children"]]
-
-    except Exception as e:
-        print("❌ Fetch exception:", e)
+    except:
         return []
 
 # ================= FORMAT =================
@@ -54,29 +51,25 @@ def format_post(post):
 
 # ================= INIT LOAD =================
 def init_load():
-    print("🚀 INIT LOAD...")
+    print("🚀 INIT LOAD FROM RAW")
 
-    posts = fetch_new_posts()
+    docs = list(raw_collection.find().sort("created_utc", -1).limit(WINDOW_SIZE))
+
     inserted = 0
-
-    for post in posts:
+    for doc in docs:
         try:
-            collection.insert_one(format_post(post))
+            rt_collection.insert_one(doc)
             inserted += 1
-
-            if inserted >= WINDOW_SIZE:
-                break
-
         except:
             continue
 
-    print("✅ Loaded:", inserted)
+    print("✅ Loaded into realtime:", inserted)
 
-# ================= UPDATE POSTS =================
-def update_existing_posts():
-    print("🔄 Updating posts...")
+# ================= UPDATE =================
+def update_existing():
+    print("🔄 Updating realtime posts...")
 
-    docs = list(collection.find({}, {"id": 1}))
+    docs = list(rt_collection.find({}, {"id": 1}))
 
     for doc in docs:
         post_id = doc["id"]
@@ -85,14 +78,12 @@ def update_existing_posts():
 
         try:
             res = requests.get(url, headers=HEADERS, timeout=10)
-
             if res.status_code != 200:
                 continue
 
-            data = res.json()
-            post_data = data[0]["data"]["children"][0]["data"]
+            post_data = res.json()[0]["data"]["children"][0]["data"]
 
-            collection.update_one(
+            rt_collection.update_one(
                 {"id": post_id},
                 {
                     "$set": {
@@ -102,11 +93,10 @@ def update_existing_posts():
                     }
                 }
             )
-
         except:
             continue
 
-# ================= ADD NEW POSTS =================
+# ================= ADD NEW =================
 def add_new_posts():
     print("🆕 Adding new posts...")
 
@@ -114,20 +104,31 @@ def add_new_posts():
     added = 0
 
     for post in posts:
-        if collection.find_one({"id": post["id"]}):
+        if rt_collection.find_one({"id": post["id"]}):
             continue
 
         try:
-            collection.insert_one(format_post(post))
+            formatted = format_post(post)
+
+            # lưu vào realtime
+            rt_collection.insert_one(formatted)
+
+            # lưu luôn vào raw (nếu chưa có)
+            raw_collection.update_one(
+                {"id": post["id"]},
+                {"$setOnInsert": formatted},
+                upsert=True
+            )
+
             added += 1
         except:
             continue
 
     print("➕ Added:", added)
 
-# ================= ENFORCE WINDOW =================
+# ================= WINDOW =================
 def enforce_window():
-    total = collection.count_documents({})
+    total = rt_collection.count_documents({})
 
     if total <= WINDOW_SIZE:
         return
@@ -136,30 +137,26 @@ def enforce_window():
 
     print(f"🧹 Removing {remove_count} old posts...")
 
-    old_posts = collection.find().sort("created_utc", 1).limit(remove_count)
-
+    old_posts = rt_collection.find().sort("created_utc", 1).limit(remove_count)
     ids = [p["id"] for p in old_posts]
 
-    collection.delete_many({"id": {"$in": ids}})
+    rt_collection.delete_many({"id": {"$in": ids}})
 
-# ================= MAIN LOOP =================
+# ================= MAIN =================
 def run():
-    print("🔥 REAL-TIME SYSTEM START")
+    print("🔥 REALTIME PROCESSOR START")
 
-    if collection.count_documents({}) == 0:
+    if rt_collection.count_documents({}) == 0:
         init_load()
 
     while True:
         print("\n===== UPDATE CYCLE =====")
 
-        update_existing_posts()   # update score + comments
-        add_new_posts()           # thêm bài mới
-        enforce_window()          # giữ đúng 500 bài
+        update_existing()
+        add_new_posts()
+        enforce_window()
 
-        total = collection.count_documents({})
-        print("📊 TOTAL:", total)
-
-        print(f"⏳ Sleep {UPDATE_INTERVAL}s...\n")
+        print("📊 REALTIME SIZE:", rt_collection.count_documents({}))
         time.sleep(UPDATE_INTERVAL)
 
 # ================= START =================

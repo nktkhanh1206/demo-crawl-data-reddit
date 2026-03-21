@@ -1,0 +1,14 @@
+# Python environment
+venv/
+.venv/
+env/
+
+# VS Code
+.vscode/
+
+# Config files (Chứa API key của bạn)
+config.properties
+
+# Python bytecode
+__pycache__/
+*.py[cod]

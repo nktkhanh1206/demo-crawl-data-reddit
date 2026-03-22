@@ -4,70 +4,108 @@ from pymongo import MongoClient
 from datetime import datetime
 
 # ================= CONFIG =================
-SUBREDDIT = "technology"
 WINDOW_SIZE = 500
-UPDATE_INTERVAL = 60  # 1 phút
+UPDATE_INTERVAL = 60  # seconds
+USE_API_UPDATE = True  # bật/tắt update từ Reddit
 
 # ================= MONGO =================
 client = MongoClient("mongodb://localhost:27017/")
 db = client["reddit_db"]
 
-raw_collection = db["posts_raw"]          # dữ liệu gốc
-rt_collection = db["posts_realtime"]      # dữ liệu realtime
+raw_collection = db["posts"]
+rt_collection = db["posts_realtime"]
 
 rt_collection.create_index("id", unique=True)
-
+rt_collection.create_index("created_utc")
+    
 # ================= HEADERS =================
 HEADERS = {
     "User-Agent": "Mozilla/5.0 realtime-bot/2.0"
 }
 
-# ================= FETCH =================
-def fetch_new_posts():
-    url = f"https://www.reddit.com/r/{SUBREDDIT}/new.json?limit=100"
-
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code != 200:
-            return []
-        data = res.json()
-        return [p["data"] for p in data["data"]["children"]]
-    except:
-        return []
-
-# ================= FORMAT =================
-def format_post(post):
-    return {
-        "id": post["id"],
-        "subreddit": post.get("subreddit"),
-        "title": post.get("title"),
-        "content": post.get("selftext"),
-        "score": post.get("score"),
-        "num_comments": post.get("num_comments"),
-        "created_utc": post.get("created_utc"),
-        "updated_at": datetime.utcnow(),
-        "payload": post
-    }
 
 # ================= INIT LOAD =================
 def init_load():
-    print("🚀 INIT LOAD FROM RAW")
+    print("🚀 INIT FROM RAW")
 
-    docs = list(raw_collection.find().sort("created_utc", -1).limit(WINDOW_SIZE))
+    raw_count = raw_collection.count_documents({})
+    print("📦 RAW COUNT:", raw_count)
+
+    docs = list(
+        raw_collection.find({
+            "created_utc": {"$exists": True, "$ne": None}
+        })
+        .sort("created_utc", -1)
+        .limit(WINDOW_SIZE)
+    )
 
     inserted = 0
+
     for doc in docs:
         try:
-            rt_collection.insert_one(doc)
+            raw = doc.get("raw", {})
+
+            rt_collection.update_one(
+                {"id": doc["id"]},
+                {"$set": {
+                    "id": doc["id"],
+                    "subreddit": doc.get("subreddit"),
+                    "created_utc": doc.get("created_utc"),
+                    "score": raw.get("score", 0),
+                    "num_comments": raw.get("num_comments", 0),
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
             inserted += 1
-        except:
-            continue
+        except Exception as e:
+            print("❌ INIT ERROR:", e)
 
-    print("✅ Loaded into realtime:", inserted)
+    print("✅ INIT DONE:", inserted)
 
-# ================= UPDATE =================
+
+# ================= SYNC FROM RAW =================
+def sync_new_from_raw():
+    print("📥 Sync new posts from RAW")
+
+    latest = rt_collection.find_one(sort=[("created_utc", -1)])
+    latest_time = latest["created_utc"] if latest else 0
+
+    new_docs = raw_collection.find({
+        "created_utc": {"$gt": latest_time}
+    }).sort("created_utc", -1)
+
+    added = 0
+
+    for doc in new_docs:
+        try:
+            raw = doc.get("raw", {})
+
+            rt_collection.update_one(
+                {"id": doc["id"]},
+                {"$set": {
+                    "id": doc["id"],
+                    "subreddit": doc.get("subreddit"),
+                    "created_utc": doc.get("created_utc"),
+                    "score": raw.get("score", 0),
+                    "num_comments": raw.get("num_comments", 0),
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+            added += 1
+        except Exception as e:
+            print("❌ SYNC ERROR:", e)
+
+    print("➕ Added from RAW:", added)
+
+
+# ================= UPDATE FROM API =================
 def update_existing():
-    print("🔄 Updating realtime posts...")
+    if not USE_API_UPDATE:
+        return
+
+    print("🔄 Updating realtime posts (API)...")
 
     docs = list(rt_collection.find({}, {"id": 1}))
 
@@ -78,6 +116,12 @@ def update_existing():
 
         try:
             res = requests.get(url, headers=HEADERS, timeout=10)
+
+            if res.status_code == 429:
+                print("⛔ RATE LIMIT → sleep 5s")
+                time.sleep(5)
+                continue
+
             if res.status_code != 200:
                 continue
 
@@ -87,46 +131,17 @@ def update_existing():
                 {"id": post_id},
                 {
                     "$set": {
-                        "score": post_data.get("score"),
-                        "num_comments": post_data.get("num_comments"),
+                        "score": post_data.get("score", 0),
+                        "num_comments": post_data.get("num_comments", 0),
                         "updated_at": datetime.utcnow()
                     }
                 }
             )
-        except:
-            continue
+        except Exception as e:
+            print("❌ UPDATE ERROR:", e)
 
-# ================= ADD NEW =================
-def add_new_posts():
-    print("🆕 Adding new posts...")
 
-    posts = fetch_new_posts()
-    added = 0
-
-    for post in posts:
-        if rt_collection.find_one({"id": post["id"]}):
-            continue
-
-        try:
-            formatted = format_post(post)
-
-            # lưu vào realtime
-            rt_collection.insert_one(formatted)
-
-            # lưu luôn vào raw (nếu chưa có)
-            raw_collection.update_one(
-                {"id": post["id"]},
-                {"$setOnInsert": formatted},
-                upsert=True
-            )
-
-            added += 1
-        except:
-            continue
-
-    print("➕ Added:", added)
-
-# ================= WINDOW =================
+# ================= SLIDING WINDOW =================
 def enforce_window():
     total = rt_collection.count_documents({})
 
@@ -142,30 +157,34 @@ def enforce_window():
 
     rt_collection.delete_many({"id": {"$in": ids}})
 
-# ================= MAIN =================
+
+# ================= MAIN LOOP =================
 def run():
-    print("🔥 REALTIME PROCESSOR START")
+    print("🔥 MODULE 02 — REALTIME START")
 
-    if rt_collection.count_documents({}) == 0:
-        init_load()
-
-    while True:
-        print("\n===== UPDATE CYCLE =====")
-
-        update_existing()
-        add_new_posts()
-        enforce_window()
-
-        print("📊 REALTIME SIZE:", rt_collection.count_documents({}))
-        time.sleep(UPDATE_INTERVAL)
-
-# ================= START =================
-if __name__ == "__main__":
     try:
         client.server_info()
         print("✅ Mongo Connected")
     except Exception as e:
         print("❌ Mongo Error:", e)
-        exit()
+        return
 
+    # FORCE INIT để đảm bảo có data
+    init_load()
+
+    while True:
+        print("\n===== UPDATE CYCLE =====")
+
+        sync_new_from_raw()
+        update_existing()
+        enforce_window()
+
+        total = rt_collection.count_documents({})
+        print("📊 REALTIME SIZE:", total)
+
+        time.sleep(UPDATE_INTERVAL)
+
+
+# ================= START =================
+if __name__ == "__main__":
     run()

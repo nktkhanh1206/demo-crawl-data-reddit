@@ -1,3 +1,5 @@
 requests
 pymongo
 aiohttp
+
+#pip install streamlit pymongo pandas

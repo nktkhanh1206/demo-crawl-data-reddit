@@ -4,35 +4,42 @@ from pymongo import MongoClient
 from datetime import datetime
 
 # ================= CONFIG =================
-MODE = "fast"  # fast | timeline
-SPEED = 10     # tốc độ (timeline mode)
+MODE = "fast"  # fast | timeline | multi
+SOURCE = "realtime"  # raw | realtime
+
+SPEED = 10
 BATCH_SIZE = 100
 WORKERS = 10
 
 # ================= MONGO =================
 client = MongoClient("mongodb://localhost:27017/")
 db = client["reddit_db"]
-collection = db["posts"]
 
-# ================= FORMAT =================
+raw_collection = db["posts_raw"]
+rt_collection = db["posts_realtime"]
+
+collection = rt_collection if SOURCE == "realtime" else raw_collection
+
+
+# ================= FORMAT EVENT =================
 def format_event(doc):
     return {
-        "event_type": doc.get("event_type", "REPLAY_POST"),
+        "event_type": "REPLAY_POST",
         "id": doc.get("id"),
         "subreddit": doc.get("subreddit"),
-        "title": doc.get("title"),
-        "score": doc.get("score"),
-        "num_comments": doc.get("num_comments"),
+        "score": doc.get("score") or doc.get("raw", {}).get("score"),
+        "num_comments": doc.get("num_comments") or doc.get("raw", {}).get("num_comments"),
         "created_utc": doc.get("created_utc"),
-        "timestamp": doc.get("timestamp")
+        "timestamp": datetime.utcnow()
     }
+
 
 # ================= SEND =================
 def send_event(event):
-    # 👉 giả lập stream output
-    print(f"📡 {event['id']} | {event['score']} | {event['num_comments']}")
+    print(f"📡 {event['id']} | 👍 {event['score']} | 💬 {event['num_comments']}")
 
-# ================= FAST REPLAY =================
+
+# ================= FAST =================
 def replay_fast():
     print("🚀 FAST REPLAY START")
 
@@ -45,9 +52,10 @@ def replay_fast():
         send_event(event)
         count += 1
 
-    print(f"🔥 DONE FAST REPLAY | TOTAL: {count}")
+    print(f"🔥 DONE FAST | TOTAL: {count}")
 
-# ================= TIMELINE REPLAY =================
+
+# ================= TIMELINE =================
 def replay_timeline():
     print("⏱️ TIMELINE REPLAY START")
 
@@ -70,9 +78,10 @@ def replay_timeline():
 
         start_time = event_time
 
-    print("🔥 DONE TIMELINE REPLAY")
+    print("🔥 DONE TIMELINE")
 
-# ================= MULTI-THREAD REPLAY =================
+
+# ================= MULTI THREAD =================
 def replay_multithread():
     print("⚡ MULTI-THREAD REPLAY START")
 
@@ -86,7 +95,6 @@ def replay_multithread():
             event = format_event(doc)
             send_event(event)
 
-    # chia chunk
     chunk_size = max(1, total // WORKERS)
     threads = []
 
@@ -102,11 +110,12 @@ def replay_multithread():
     for t in threads:
         t.join()
 
-    print("🔥 DONE MULTI-THREAD REPLAY")
+    print("🔥 DONE MULTI")
+
 
 # ================= MAIN =================
 def run():
-    print("🎬 REPLAY MODULE START")
+    print("🎬 MODULE 03 — REPLAY START")
 
     try:
         client.server_info()
@@ -114,6 +123,8 @@ def run():
     except Exception as e:
         print("❌ Mongo Error:", e)
         return
+
+    print(f"📦 SOURCE: {SOURCE}")
 
     if MODE == "fast":
         replay_fast()
@@ -123,6 +134,7 @@ def run():
 
     elif MODE == "multi":
         replay_multithread()
+
 
 # ================= START =================
 if __name__ == "__main__":

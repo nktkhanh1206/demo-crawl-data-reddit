@@ -5,7 +5,7 @@ from datetime import datetime
 from pymongo import MongoClient
 
 # ================= LOAD CONFIG =================
-def load_config(path="K:\DataReddit\demo-crawl-data-reddit\config.properties"):
+def load_config(path="K:\\DataReddit\\demo-crawl-data-reddit\\config.properties"):
     config = {}
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -15,6 +15,7 @@ def load_config(path="K:\DataReddit\demo-crawl-data-reddit\config.properties"):
             key, value = line.split("=", 1)
             config[key.strip()] = value.strip()
     return config
+
 
 # ================= USER AGENT =================
 USER_AGENTS = [
@@ -30,31 +31,38 @@ def get_headers():
         "Referer": "https://www.reddit.com/"
     }
 
-# ================= FORMAT =================
-def format_post(post):
+
+# ================= FORMAT RAW =================
+def format_raw(post):
     return {
         "id": post["id"],
         "subreddit": post.get("subreddit"),
-        "title": post.get("title"),
-        "content": post.get("selftext"),
-        "score": post.get("score"),
-        "num_comments": post.get("num_comments"),
         "created_utc": post.get("created_utc"),
-        "timestamp": datetime.fromtimestamp(post["created_utc"]),
+
+        # RAW DATA (FULL)
+        "raw": post,
+
+        # METADATA
+        "crawl_time": datetime.utcnow(),
+        "source": "reddit_api"
     }
 
-# ================= SAVE (UPSERT) =================
+
+# ================= SAVE =================
 def save(post, collection):
     try:
+        doc = format_raw(post)
+
         collection.update_one(
-            {"id": post["id"]},
-            {"$set": format_post(post)},
+            {"id": doc["id"]},
+            {"$set": doc},
             upsert=True
         )
         return 1
     except Exception as e:
         print("❌ SAVE ERROR:", e)
         return 0
+
 
 # ================= FETCH =================
 async def fetch(session, subreddit, after):
@@ -64,12 +72,17 @@ async def fetch(session, subreddit, after):
         url += f"&after={after}"
 
     try:
-        async with session.get(url, headers=get_headers(), timeout=10) as res:
+        async with session.get(
+            url,
+            headers=get_headers(),
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as res:
+
             print(f"[{subreddit}] STATUS:", res.status)
 
             if res.status == 429:
-                print("⛔ RATE LIMIT → sleep 15s")
-                await asyncio.sleep(15)
+                print("⛔ RATE LIMIT → sleep 30s")
+                await asyncio.sleep(30)
                 return [], after
 
             if res.status != 200:
@@ -80,13 +93,13 @@ async def fetch(session, subreddit, after):
             next_after = data["data"].get("after")
 
             print(f"[{subreddit}] FETCHED:", len(posts))
-
             return posts, next_after
 
     except Exception as e:
         print(f"[{subreddit}] ERROR:", e)
         await asyncio.sleep(5)
         return [], after
+
 
 # ================= MAIN =================
 async def run():
@@ -98,10 +111,14 @@ async def run():
     MIN_DELAY = float(cfg["min_delay"])
     MAX_DELAY = float(cfg["max_delay"])
 
-    # Mongo
+    # MongoDB
     client = MongoClient(cfg["mongo_uri"])
     db = client[cfg["db_name"]]
     collection = db[cfg["collection_name"]]
+
+    # Index (quan trọng)
+    collection.create_index("id", unique=True)
+    collection.create_index("created_utc")
 
     total = collection.count_documents({})
     print("🚀 START FROM:", total)
@@ -140,6 +157,7 @@ async def run():
             await asyncio.sleep(sleep_time)
 
     print("🎉 DONE:", total)
+
 
 # ================= RUN =================
 if __name__ == "__main__":

@@ -1,0 +1,194 @@
+🚀 MODULE No.04 — ANALYTICS & PREDICTION ENGINE
+
+==================================================
+1. MỤC TIÊU
+==================================================
+Module này có nhiệm vụ:
+
+- Phân tích dữ liệu Reddit trong 24 giờ gần nhất
+- Xác định:
+  + Chủ đề đang được quan tâm nhất
+  + Bài viết trending nhất
+- Dự đoán:
+  + Chủ đề sẽ hot tiếp theo
+  + Bài viết có khả năng trở thành trending
+
+Đây là tầng xử lý thông minh của hệ thống.
+
+
+==================================================
+2. INPUT
+==================================================
+Nguồn dữ liệu:
+
+- Collection: posts_realtime hoặc posts_raw
+- Database: MongoDB
+
+Dữ liệu đầu vào gồm các trường chính:
+- id
+- subreddit
+- title
+- score
+- num_comments
+- created_utc
+- timestamp (datetime)
+
+
+==================================================
+3. PHẠM VI PHÂN TÍCH
+==================================================
+Chỉ sử dụng dữ liệu trong 24 giờ gần nhất.
+
+Điều kiện lọc:
+timestamp >= current_time - 24h
+
+Mục đích:
+- Loại bỏ dữ liệu cũ
+- Tập trung vào xu hướng hiện tại
+
+
+==================================================
+4. CHỨC NĂNG PHÂN TÍCH (ANALYTICS)
+==================================================
+
+4.1. HOT TOPIC (CHỦ ĐỀ NỔI BẬT)
+
+Mục tiêu:
+- Tìm subreddit có tổng tương tác cao nhất
+
+Cách tính:
+topic_score = tổng(score + num_comments)
+
+Quy trình:
+1. Lọc dữ liệu 24h
+2. Nhóm theo subreddit
+3. Tính tổng score và comment
+4. Sắp xếp giảm dần
+5. Lấy top N
+
+
+--------------------------------------------------
+
+4.2. TRENDING POST (BÀI VIẾT HOT)
+
+Mục tiêu:
+- Tìm bài viết có độ hot cao nhất tại thời điểm hiện tại
+
+Cách tính:
+trending_score = (score + num_comments * 2) / (age_hours + 2)
+
+Trong đó:
+- age_hours = thời gian từ lúc đăng (giờ)
+
+Ý nghĩa:
+- Bài mới + nhiều tương tác → điểm cao
+- Bài cũ → giảm dần
+
+
+==================================================
+5. CHỨC NĂNG DỰ ĐOÁN (PREDICTION)
+==================================================
+
+5.1. DỰ ĐOÁN HOT TOPIC
+
+Mục tiêu:
+- Xác định chủ đề đang tăng trưởng nhanh nhất
+
+Cách tính:
+growth_score = tổng( (score + num_comments) / (age_hours + 1) )
+
+Quy trình:
+1. Lọc dữ liệu 24h
+2. Tính age_hours cho từng bài
+3. Nhóm theo subreddit
+4. Tính tổng growth_score
+5. Sắp xếp giảm dần
+
+
+--------------------------------------------------
+
+5.2. DỰ ĐOÁN TRENDING POST
+
+Mục tiêu:
+- Tìm bài viết có khả năng trở thành trending
+
+Cách tính:
+predict_score = (score + num_comments * 2) / (age_hours + 1)
+
+Ý nghĩa:
+- Bài mới + đang tăng nhanh → điểm cao
+
+
+==================================================
+6. OUTPUT
+==================================================
+
+Module trả về các kết quả:
+
+- Danh sách Top N chủ đề nổi bật
+- Danh sách Top N bài viết trending
+- Danh sách Top N chủ đề có xu hướng tăng trưởng
+- Danh sách Top N bài viết có khả năng trend
+
+(Không trả JSON trong code, chỉ dùng trong API layer nếu cần)
+
+
+==================================================
+7. VAI TRÒ TRONG HỆ THỐNG
+==================================================
+
+Module này đóng vai trò:
+
+- Analytics Layer
+- Intelligence Layer
+
+Nó giúp:
+- Hiểu dữ liệu hiện tại
+- Dự đoán xu hướng tương lai
+
+
+==================================================
+8. LUỒNG HOẠT ĐỘNG
+==================================================
+
+MongoDB
+   ↓
+Filter 24h
+   ↓
+Analytics (Hot / Trending)
+   ↓
+Prediction (Growth / Predict)
+   ↓
+Output kết quả
+
+
+==================================================
+9. TÍNH CHẤT
+==================================================
+
+- Near Real-time
+- Dựa trên dữ liệu streaming (Module 02)
+- Có khả năng mở rộng (AI, ML)
+
+
+==================================================
+10. HƯỚNG NÂNG CẤP
+==================================================
+
+- Lưu snapshot theo thời gian để phân tích trend thật
+- Áp dụng Machine Learning
+- Phân tích sentiment (tích cực / tiêu cực)
+- Dashboard realtime
+- API phục vụ frontend
+
+
+==================================================
+11. KẾT LUẬN
+==================================================
+
+Module 04 là trung tâm phân tích và dự đoán của hệ thống:
+
+- Biến dữ liệu thô thành thông tin có giá trị
+- Giúp xác định xu hướng hiện tại và tương lai
+
+=> Đây là thành phần quan trọng nhất để nâng hệ thống lên mức "intelligent system"

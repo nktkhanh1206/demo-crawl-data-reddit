@@ -10,12 +10,24 @@
 
 
 ==================================================
-2. KIẾN TRÚC TỔNG QUAN
+2. KIẾN TRÚC TỔNG QUAN (UPDATED)
 ==================================================
-[Module 01] → [MongoDB] → [Module 02] → [Module 03]
+                Reddit API
+                     ↓
+        [Module 01 — Crawler]
+                     ↓
+                MongoDB
+              (posts_raw)
+                     ↓
+        [Module 02 — Realtime]
+                     ↓
+            (posts_realtime)
+                ↓        ↓
+     [Module 04]      [Module 03]
+      Analytics         Replay
 
-Crawler        Storage       Realtime      Replay
 
+Crawler        Storage     Processing     Analytics / Replay
 
 ==================================================
 3. THIẾT KẾ DỮ LIỆU
@@ -74,7 +86,7 @@ Vai trò:
 
 
 ==================================================
-6. MODULE No.03 — REPLAY STREAMING
+6. MODULE No.03 — REPLAY STREAMING (UPDATED)
 ==================================================
 Chức năng:
 - Đọc dữ liệu từ MongoDB
@@ -93,11 +105,45 @@ Output:
 - Event stream
 
 Vai trò:
-- Serving / Simulation Layer
-
+- Simulation Layer (không nằm trong pipeline chính)
 
 ==================================================
-7. LUỒNG DỮ LIỆU
+7. MODULE No.04 — ANALYTICS & PREDICTION
+==================================================
+Chức năng:
+- Phân tích dữ liệu trong 24 giờ gần nhất
+- Xác định:
+  + Chủ đề hot nhất (Hot Topics)
+  + Bài viết trending nhất
+- Dự đoán:
+  + Xu hướng tiếp theo
+  + Bài viết có khả năng viral
+
+Quy trình:
+1. Lọc dữ liệu
+   - Chỉ lấy bài trong 24h
+
+2. Phân tích chủ đề
+   - Group theo subreddit
+   - Tổng: score + num_comments
+
+3. Phân tích trending post
+   - trending_score = (score + num_comments * 2) / (age_hours + 2)
+
+4. Prediction
+   - predict_score = (score + num_comments * 2) / (age_hours + 1)
+
+Output:
+- Hot Topics
+- Trending Posts
+- Predicted Topics
+- Predicted Posts
+
+Vai trò:
+- Analytics Layer (Consumer)
+
+==================================================
+8. LUỒNG DỮ LIỆU (UPDATED)
 ==================================================
 Reddit API
     ↓
@@ -109,11 +155,11 @@ Module 02 (Realtime)
     ↓
 posts_realtime
     ↓
-Module 03 (Replay)
-
+        ├── Module 04 (Analytics)
+        └── Module 03 (Replay)
 
 ==================================================
-8. TÍNH CHẤT HỆ THỐNG
+9. TÍNH CHẤT HỆ THỐNG
 ==================================================
 - Kiểu: Near Real-time
 - Cơ chế: Polling
@@ -123,7 +169,7 @@ Module 03 (Replay)
 
 
 ==================================================
-9. HẠN CHẾ
+10. HẠN CHẾ
 ==================================================
 - Không phải real-time thực sự
 - Có thể bị rate limit từ Reddit
@@ -132,7 +178,7 @@ Module 03 (Replay)
 
 
 ==================================================
-10. HƯỚNG NÂNG CẤP
+11. HƯỚNG NÂNG CẤP
 ==================================================
 - Async request (aiohttp)
 - Bulk write MongoDB
@@ -142,12 +188,20 @@ Module 03 (Replay)
 
 
 ==================================================
-11. KẾT LUẬN
+12. KẾT LUẬN
 ==================================================
-Hệ thống gồm 3 tầng:
+Hệ thống gồm 3 phần chính:
 
-1. Ingestion Layer   → Module 01
-2. Processing Layer  → Module 02
-3. Serving Layer     → Module 03
+1. Core Data Pipeline
+   - Module 01 (Ingestion)
+   - Module 02 (Realtime Processing)
+   - MongoDB (Storage)
 
-=> Đây là mô hình Data Pipeline + Streaming System cơ bản
+2. Analytics Layer
+   - Module 04 (Trend + Prediction)
+
+3. Supporting Layer
+   - Module 03 (Replay / Simulation)
+
+=> Đây là mô hình:
+Data Pipeline + Streaming + Analytics System

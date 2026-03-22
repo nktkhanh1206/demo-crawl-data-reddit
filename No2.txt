@@ -1,119 +1,131 @@
 ========================================
-REAL-TIME REDDIT TRACKING SYSTEM SPEC
+MODULE 2: REALTIME PROCESSOR SPEC
 ========================================
 
 1. OVERVIEW
 ----------------------------------------
-Hệ thống là một crawler realtime dùng để:
-- Theo dõi bài viết mới trên Reddit
-- Cập nhật liên tục score và số comment
-- Duy trì một cửa sổ dữ liệu cố định (sliding window)
+Module 2 là hệ thống xử lý realtime dữ liệu Reddit, 
+kết hợp giữa dữ liệu lịch sử (raw) và dữ liệu cập nhật 
+liên tục (realtime).
 
 Mục tiêu:
-- Mô phỏng hệ thống streaming dữ liệu
-- Phục vụ phân tích realtime (AI, dashboard, analytics)
+- Xây dựng pipeline dữ liệu 2 tầng:
+    + Raw storage (lưu trữ lâu dài)
+    + Realtime storage (xử lý nhanh)
+- Theo dõi sự thay đổi của bài viết theo thời gian
+- Duy trì tập dữ liệu kích thước cố định (sliding window)
 
 ----------------------------------------
 
 2. SYSTEM ARCHITECTURE
 ----------------------------------------
 
-[Reddit API (.json)]
-        ↓
-[Fetcher]
-        ↓
-[Formatter]
-        ↓
-[MongoDB Storage]
-        ↓
-[Updater Loop]
-        ↓
-[Sliding Window Manager]
+          [Reddit API]
+                ↓
+           [Fetcher]
+                ↓
+        -------------------
+        |                 |
+   [Raw Storage]   [Realtime Storage]
+        |                 ↓
+        |          [Updater Loop]
+        |                 ↓
+        |         [Sliding Window]
+        -------------------
 
 ----------------------------------------
 
-3. CONFIGURATION
+3. DATABASE DESIGN
+----------------------------------------
+
+Database: reddit_db
+
+Collections:
+
+3.1 posts_raw
+- Lưu toàn bộ dữ liệu lịch sử
+- Không bị xóa
+- Dùng cho phân tích offline
+
+3.2 posts_realtime
+- Chỉ chứa WINDOW_SIZE bài gần nhất
+- Luôn được cập nhật
+- Dùng cho realtime processing
+
+Index:
+- id (unique) trên posts_realtime
+
+----------------------------------------
+
+4. CONFIGURATION
 ----------------------------------------
 
 SUBREDDIT:
-- Chủ đề cần theo dõi (ví dụ: technology)
+- Chủ đề cần theo dõi
 
 WINDOW_SIZE:
-- Số lượng bài viết tối đa lưu trong DB (ví dụ: 500)
+- Số lượng bài giữ trong realtime
 
 UPDATE_INTERVAL:
 - Chu kỳ cập nhật (giây)
-- Ví dụ: 60s = mỗi 1 phút
 
 ----------------------------------------
 
-4. COMPONENTS
+5. COMPONENTS
 ----------------------------------------
 
-4.1 MongoDB Layer
-- Database: reddit_db
-- Collection: realtime_posts
-
-Index:
-- id (unique)
-
-Mục đích:
-- Tránh trùng dữ liệu
-- Tăng tốc truy vấn
-
+5.1 Fetcher (fetch_new_posts)
 ----------------------------------------
-
-4.2 Fetcher (fetch_new_posts)
-
-Chức năng:
-- Gọi API Reddit:
+- Gọi API:
   https://www.reddit.com/r/{subreddit}/new.json
 
-Output:
-- Danh sách bài viết mới
+- Trả về danh sách bài viết mới
 
-Xử lý lỗi:
-- HTTP != 200 → bỏ qua
-- Exception → return []
+- Xử lý lỗi:
+    + HTTP != 200 → return []
+    + Exception → return []
 
 ----------------------------------------
 
-4.3 Formatter (format_post)
-
-Chuyển JSON → document MongoDB
+5.2 Formatter (format_post)
+----------------------------------------
+Chuyển dữ liệu Reddit → MongoDB document
 
 Fields:
-- id: ID bài viết
-- subreddit: tên subreddit
-- title: tiêu đề
-- content: nội dung
-- score: điểm vote
-- num_comments: số comment
-- created_utc: thời gian tạo
-- updated_at: thời gian cập nhật gần nhất
-- payload: full JSON gốc
+- id
+- subreddit
+- title
+- content
+- score
+- num_comments
+- created_utc
+- updated_at
+- payload (full JSON)
 
 ----------------------------------------
 
-4.4 Init Load (init_load)
-
+5.3 Init Load (init_load)
+----------------------------------------
 Chức năng:
-- Load dữ liệu ban đầu
+- Khởi tạo realtime từ raw
 
 Cơ chế:
-- Fetch posts mới
-- Insert vào DB
-- Dừng khi đạt WINDOW_SIZE
+- Lấy WINDOW_SIZE bài mới nhất từ posts_raw
+- Insert vào posts_realtime
+
+Mục đích:
+- Tránh phải crawl lại từ đầu
+- Khởi động nhanh hệ thống
 
 ----------------------------------------
 
-4.5 Update Existing Posts (update_existing_posts)
-
+5.4 Update Existing (update_existing)
+----------------------------------------
 Chức năng:
-- Cập nhật score + comment
+- Cập nhật trạng thái bài viết realtime
 
 Cơ chế:
-- Lấy danh sách id trong DB
+- Lấy tất cả id từ posts_realtime
 - Gọi API:
   https://www.reddit.com/comments/{id}.json
 
@@ -122,119 +134,140 @@ Cơ chế:
     num_comments
     updated_at
 
+Ý nghĩa:
+- Theo dõi sự thay đổi theo thời gian
+
 ----------------------------------------
 
-4.6 Add New Posts (add_new_posts)
-
+5.5 Add New Posts (add_new_posts)
+----------------------------------------
 Chức năng:
-- Thêm bài viết mới vào DB
+- Thêm bài mới vào hệ thống
 
 Cơ chế:
 - Fetch posts mới
-- Check id đã tồn tại chưa
-- Nếu chưa → insert
+- Nếu chưa tồn tại trong realtime:
+    → insert vào posts_realtime
+
+- Đồng thời:
+    → lưu vào posts_raw bằng upsert
+
+Upsert:
+- Nếu chưa có → insert
+- Nếu đã có → giữ nguyên
 
 ----------------------------------------
 
-4.7 Sliding Window (enforce_window)
-
+5.6 Sliding Window (enforce_window)
+----------------------------------------
 Chức năng:
-- Giữ số lượng document <= WINDOW_SIZE
+- Giữ số lượng bài realtime <= WINDOW_SIZE
 
 Cơ chế:
 - Nếu vượt:
-    → sort theo created_utc tăng dần
+    → sort theo created_utc (tăng dần)
     → xóa bài cũ nhất
 
 ----------------------------------------
 
-5. WORKFLOW
+6. WORKFLOW
 ----------------------------------------
 
 Bước 1: Start chương trình
 Bước 2: Kết nối MongoDB
-Bước 3: Nếu DB rỗng → init_load()
+
+Bước 3:
+    Nếu posts_realtime rỗng:
+        → init_load()
 
 Bước 4: Loop vô hạn:
 
     UPDATE CYCLE:
 
-    1. update_existing_posts()
+    1. update_existing()
     2. add_new_posts()
     3. enforce_window()
 
-    4. In tổng số bài
+    4. In kích thước realtime
     5. Sleep UPDATE_INTERVAL
 
 ----------------------------------------
 
-6. DATA FLOW
+7. DATA FLOW
 ----------------------------------------
 
-Reddit → Fetch → Format → MongoDB
-MongoDB → Update → MongoDB
-MongoDB → Clean → MongoDB
-
-----------------------------------------
-
-7. ERROR HANDLING
-----------------------------------------
-
-HTTP error:
-- Bỏ qua request
-
-Duplicate key:
-- Bỏ qua insert
-
-Network error:
-- Catch exception và continue
+Reddit → Fetch → Format → Raw + Realtime
+Realtime → Update → Realtime
+Realtime → Clean → Realtime
 
 ----------------------------------------
 
-8. PERFORMANCE CHARACTERISTICS
+8. ERROR HANDLING
+----------------------------------------
+
+- HTTP error → bỏ qua request
+- Duplicate key → bỏ qua insert
+- Network error → catch và continue
+
+----------------------------------------
+
+9. PERFORMANCE CHARACTERISTICS
 ----------------------------------------
 
 Time Complexity:
-- O(n) mỗi cycle
+- O(n) mỗi cycle (n = WINDOW_SIZE)
 
 Network Bound:
-- Phụ thuộc tốc độ API Reddit
+- Phụ thuộc Reddit API
 
-DB Operations:
+Database Operations:
 - insert_one
 - update_one
 - delete_many
+- upsert
 
 ----------------------------------------
 
-9. FEATURES
+10. FEATURES
 ----------------------------------------
 
-- Realtime data tracking
-- Sliding window (fixed size)
+- Dual storage (raw + realtime)
+- Sliding window realtime
 - Auto update score/comment
-- Không trùng dữ liệu
-- Tự động thêm/xóa data
+- Không trùng dữ liệu (upsert)
+- Khởi động nhanh từ raw
 
 ----------------------------------------
 
-10. USE CASES
+11. USE CASES
 ----------------------------------------
 
-- Dashboard realtime Reddit
+- Realtime dashboard
 - Tracking trending posts
-- Sentiment analysis realtime
-- Data pipeline streaming
+- Time-series analysis
+- Streaming simulation
+- AI training pipeline
 
 ----------------------------------------
 
-11. SUMMARY
+12. DESIGN PATTERN
 ----------------------------------------
 
-Hệ thống là một crawler realtime sử dụng polling định kỳ 
-để lấy dữ liệu từ Reddit, cập nhật trạng thái bài viết và 
-duy trì một sliding window trong MongoDB nhằm đảm bảo dữ 
-liệu luôn mới và có kích thước cố định.
+- Lambda Architecture (simplified):
+    + Batch layer → posts_raw
+    + Speed layer → posts_realtime
+
+- Polling-based streaming
+
+----------------------------------------
+
+13. SUMMARY
+----------------------------------------
+
+Module 2 là hệ thống xử lý realtime sử dụng polling để 
+cập nhật dữ liệu Reddit, kết hợp lưu trữ hai tầng (raw 
+và realtime), đồng thời duy trì sliding window nhằm đảm 
+bảo dữ liệu luôn mới, nhất quán và có kích thước ổn định.
 
 ========================================
 END OF DOCUMENT

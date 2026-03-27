@@ -1,207 +1,125 @@
-# demo-crawl-data-reddit
-🚀 SYSTEM: REDDIT DATA PIPELINE
+# 🚀 REDDIT DATA PIPELINE: REAL-TIME TREND ANALYZER
 ==================================================
+Hệ thống phân tích dữ liệu Reddit theo thời gian thực, sử dụng kiến trúc Pipeline 
+bất đồng bộ để thu thập, xử lý và dự báo xu hướng.
+
 1. MỤC TIÊU HỆ THỐNG
 ==================================================
-- Thu thập dữ liệu từ Reddit
-- Xử lý dữ liệu gần real-time
-- Lưu trữ và quản lý dữ liệu hiệu quả
-- Hỗ trợ replay để test và phân tích
+- Thu thập dữ liệu bài viết và bình luận từ Reddit API.
+- Xử lý dữ liệu gần real-time (Near Real-time) với độ trễ thấp.
+- Lưu trữ và quản lý dữ liệu phân cấp (Raw vs Realtime).
+- Thuật toán dự báo bài viết Trending dựa trên gia tốc tăng trưởng.
 
+2. KIẾN TRÚC TỔNG QUAN (DECOUPLED ARCHITECTURE)
+==================================================
+Kiến trúc tách rời giúp các module hoạt động độc lập qua Database trung tâm:
+
+    [Reddit API] 
+         ↓ (JSON)
+    [Module 01: Ingestion - Async Crawler]
+         ↓
+    [MongoDB: posts_raw & comments_raw]
+         ↓
+    [Module 02: Real-time Engine (Sync & Update)]
+         ↓
+    [MongoDB: posts_realtime (Window: 500)]
+         ↓ --------------------------
+         ↓                          ↓
+    [Module 04: Analytics]     [Module 03: Replay]
+    (Trend & Prediction)       (Simulation Layer)
+         ↓
+    [Module 05: Dashboard]
+    (Streamlit UI)
+
+3. CHI TIẾT CÁC THÀNH PHẦN (COMPONENTS)
+==================================================
+
+3.1 Module 01 — Data Ingestion (Crawler)
+- Công nghệ: aiohttp, asyncio, Motor (Async MongoDB driver).
+- Chức năng: Cào đa nguồn (All, News, Gaming...), tách biệt Posts và Comments.
+- Cơ chế: Upsert dựa trên ID để tránh trùng lặp dữ liệu.
+
+3.2 Module 02 — Real-time Processing
+- Chức năng: Duy trì Sliding Window 500 bài viết mới nhất.
+- Tối ưu: Chỉ cập nhật Score/Comments cho các bài viết < 12h để né Rate Limit (429).
+- Vai trò: Đảm bảo dữ liệu bảng "Nóng" luôn chính xác.
+
+3.3 Module 03 — Async Replay Streaming
+- Chế độ: Timeline (theo thời gian thực) | Fast (tốc độ cao).
+- Vai trò: Phát lại luồng dữ liệu để demo và kiểm thử thuật toán.
+
+3.4 Module 04 — Analytics & Prediction
+- Thuật toán Gravity: Score = (Upvotes + Cmt * 2.5) / (Age_hours + 2)^1.8
+- Vai trò: Tính toán vận tốc (Velocity) để tìm ra bài viết sắp Viral.
+
+3.5 Module 05 — Visualization Dashboard
+- Công nghệ: Streamlit, Plotly.
+- Vai trò: Giao diện trực quan hóa Dashboard cho người dùng cuối.
+
+4. THIẾT KẾ DỮ LIỆU (DATABASE SCHEMA)
+==================================================
+- reddit_db.posts_raw    : Kho lưu trữ gốc (Immutable).
+- reddit_db.comments_raw : Kho lưu trữ bình luận (Linked by post_id).
+- reddit_db.posts_realtime: Buffer lưu trữ 500 bài viết đang hoạt động.
+
+5. TÍNH CHẤT NỔI BẬT
+==================================================
+- Asynchronous: Hiệu suất cao, không nghẽn mạch khi xử lý lượng lớn dữ liệu.
+- Rate-Limit Handling: Tự động điều tiết request để tránh bị Reddit chặn IP.
+- Decoupled: Các Module không phụ thuộc trực tiếp, lỗi 1 phần không sập toàn hệ thống.
+
+6. HƯỚNG DẪN CHẠY HỆ THỐNG
+==================================================
+1. Cài đặt môi trường:
+   pip install aiohttp motor pymongo streamlit pandas plotly
+
+2. Khởi động Master Script:
+   python RUN_SYSTEM.bat (hoặc chạy từng module theo thứ tự 01 -> 02 -> 04 -> 05)
 
 ==================================================
-2. KIẾN TRÚC TỔNG QUAN (UPDATED)
+7. TÍNH CHẤT NỔI BẬT (SYSTEM PROPERTIES)
 ==================================================
-                Reddit API
-                     ↓
-        [Module 01 — Crawler]
-                     ↓
-                MongoDB
-              (posts_raw)
-                     ↓
-        [Module 02 — Realtime]
-                     ↓
-            (posts_realtime)
-                ↓        ↓
-     [Module 04]      [Module 03]
-      Analytics         Replay
-
-
-Crawler        Storage     Processing     Analytics / Replay
+- High-Performance Async: Sử dụng asyncio và aiohttp giúp cào hàng trăm bài 
+  viết mỗi phút mà không làm treo hệ thống.
+- Decoupled Architecture: Các Module giao tiếp qua Database (MongoDB). Nếu 
+  Module 01 dừng, Module 04 và Dashboard vẫn hoạt động dựa trên dữ liệu cũ.
+- Data Flattening: Phẳng hóa dữ liệu JSON phức tạp của Reddit thành các trường 
+  dễ truy vấn (Score, Title, Subreddit) ngay từ đầu phễu.
+- Intelligent Rate Limiting: Cơ chế Semaphore và Random Delay giúp "ẩn mình" 
+  né tránh thuật toán chống bot của Reddit (HTTP 429).
+- Predictive Analytics: Không chỉ thống kê quá khứ, hệ thống còn tính toán 
+  gia tốc (Velocity) để dự báo xu hướng tương lai.
 
 ==================================================
-3. THIẾT KẾ DỮ LIỆU
+8. HẠN CHẾ (LIMITATIONS)
 ==================================================
-posts_raw        : dữ liệu gốc (không thay đổi)
-posts_realtime   : dữ liệu realtime (có cập nhật)
-
-
-==================================================
-4. MODULE No.01 — DATA INGESTION (CRAWLER)
-==================================================
-Chức năng:
-- Gọi Reddit API (/new.json)
-- Lấy danh sách bài viết
-- Lưu vào MongoDB (posts_raw)
-- Tránh trùng ID
-
-Quy trình:
-1. Request API
-2. Parse JSON
-3. Format dữ liệu
-4. Insert vào DB
-
-Vai trò:
-- Data Source Layer
-
+- Phụ thuộc Polling: Hệ thống vẫn phải "hỏi" Reddit liên tục (Polling) thay 
+  vì được Reddit chủ động báo tin (Push/Webhook).
+- Giới hạn IP: Nếu chạy quá nhiều luồng song song trên 1 máy tính, Reddit 
+  có thể chặn IP tạm thời.
+- Độ trễ Real-time: Do chu kỳ quét là 60 giây, dữ liệu trên Dashboard sẽ chậm 
+  hơn thực tế trên Reddit khoảng 1 phút.
+- Chưa phân tích nội dung sâu: Hiện tại mới chỉ dựa trên các con số (Score, 
+  Comments) mà chưa "đọc" hiểu nội dung văn bản bên trong bài viết.
 
 ==================================================
-5. MODULE No.02 — REAL-TIME PROCESSING
+9. HƯỚNG NÂNG CẤP (FUTURE UPGRADES)
 ==================================================
-Chức năng:
-- Xử lý dữ liệu theo chu kỳ 60 giây
-- Duy trì tối đa 500 bài viết
-- Cập nhật:
-  + score
-  + num_comments
-- Thêm bài mới và xóa bài cũ
-
-Quy trình mỗi chu kỳ:
-1. Update dữ liệu cũ
-   - Duyệt posts_realtime
-   - Gọi API theo id
-   - Update score và comments
-
-2. Thêm bài mới
-   - Gọi /new.json
-   - Insert vào posts_realtime
-   - Upsert vào posts_raw
-
-3. Sliding Window
-   - Nếu > 500 bài
-   - Xóa bài cũ nhất
-
-Vai trò:
-- Stream Processing Layer
-
+- Tích hợp NLP (Natural Language Processing): Sử dụng thư viện như TextBlob 
+  hoặc VADER để phân tích cảm xúc (Sentiment) của các bình luận.
+- Hệ thống Cảnh báo (Alerting): Tích hợp Telegram Bot hoặc Email để nhắn tin 
+  ngay khi phát hiện một bài viết có Velocity Score vượt ngưỡng 100.
+- Mở rộng nguồn tin: Không chỉ Reddit, có thể tích hợp thêm X (Twitter) hoặc 
+  Facebook Group vào cùng một Pipeline.
+- Lưu trữ lâu dài (Cold Storage): Chuyển các bài viết sau 7 ngày sang 
+  BigQuery hoặc S3 để lưu trữ dữ liệu lớn (Big Data) phục vụ training AI.
+- Giao diện Live-Update: Sử dụng WebSocket để Dashboard tự nhảy số mà không 
+  cần nhấn nút "Refresh".
 
 ==================================================
-6. MODULE No.03 — REPLAY STREAMING (UPDATED)
+10. KẾT LUẬN (CONCLUSION)
 ==================================================
-Chức năng:
-- Đọc dữ liệu từ MongoDB
-- Phát lại dữ liệu như stream
-- Hỗ trợ test và demo
-
-Các mode:
-- Fast: phát nhanh nhất
-- Timeline: phát theo thời gian
-- Multi-thread: phát song song
-
-Input:
-- posts_raw hoặc posts_realtime
-
-Output:
-- Event stream
-
-Vai trò:
-- Simulation Layer (không nằm trong pipeline chính)
-
-==================================================
-7. MODULE No.04 — ANALYTICS & PREDICTION
-==================================================
-Chức năng:
-- Phân tích dữ liệu trong 24 giờ gần nhất
-- Xác định:
-  + Chủ đề hot nhất (Hot Topics)
-  + Bài viết trending nhất
-- Dự đoán:
-  + Xu hướng tiếp theo
-  + Bài viết có khả năng viral
-
-Quy trình:
-1. Lọc dữ liệu
-   - Chỉ lấy bài trong 24h
-
-2. Phân tích chủ đề
-   - Group theo subreddit
-   - Tổng: score + num_comments
-
-3. Phân tích trending post
-   - trending_score = (score + num_comments * 2) / (age_hours + 2)
-
-4. Prediction
-   - predict_score = (score + num_comments * 2) / (age_hours + 1)
-
-Output:
-- Hot Topics
-- Trending Posts
-- Predicted Topics
-- Predicted Posts
-
-Vai trò:
-- Analytics Layer (Consumer)
-
-==================================================
-8. LUỒNG DỮ LIỆU (UPDATED)
-==================================================
-Reddit API
-    ↓
-Module 01 (Crawler)
-    ↓
-posts_raw
-    ↓
-Module 02 (Realtime)
-    ↓
-posts_realtime
-    ↓
-        ├── Module 04 (Analytics)
-        └── Module 03 (Replay)
-
-==================================================
-9. TÍNH CHẤT HỆ THỐNG
-==================================================
-- Kiểu: Near Real-time
-- Cơ chế: Polling
-- Database: MongoDB
-- Window: 500 bài
-- Có hỗ trợ replay
-
-
-==================================================
-10. HẠN CHẾ
-==================================================
-- Không phải real-time thực sự
-- Có thể bị rate limit từ Reddit
-- Có độ trễ dữ liệu
-- Chưa tối ưu hiệu năng
-
-
-==================================================
-11. HƯỚNG NÂNG CẤP
-==================================================
-- Async request (aiohttp)
-- Bulk write MongoDB
-- Kafka (streaming thật)
-- WebSocket (realtime frontend)
-- Dashboard trực quan
-
-
-==================================================
-12. KẾT LUẬN
-==================================================
-Hệ thống gồm 3 phần chính:
-
-1. Core Data Pipeline
-   - Module 01 (Ingestion)
-   - Module 02 (Realtime Processing)
-   - MongoDB (Storage)
-
-2. Analytics Layer
-   - Module 04 (Trend + Prediction)
-
-3. Supporting Layer
-   - Module 03 (Replay / Simulation)
-
-=> Đây là mô hình:
-Data Pipeline + Streaming + Analytics System
+Dự án demo-crawl-data-reddit là một minh chứng cho việc xây dựng một luồng 
+dữ liệu (Data Pipeline) hoàn chỉnh. Từ việc thu thập thô đến khi trở thành 
+các biểu đồ phân tích xu hướng, hệ thống đã giải quyết tốt bài toán về 
+hiệu suất, tính toàn vẹn dữ liệu và khả năng mở rộng trong tương lai.

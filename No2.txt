@@ -1,274 +1,93 @@
-========================================
-MODULE 2: REALTIME PROCESSOR SPEC
-========================================
+==================================================
+MODULE 02: ASYNC REALTIME PROCESSOR SPECIFICATION
+==================================================
 
 1. OVERVIEW
-----------------------------------------
-Module 2 là hệ thống xử lý realtime dữ liệu Reddit, 
-kết hợp giữa dữ liệu lịch sử (raw) và dữ liệu cập nhật 
-liên tục (realtime).
+-----------
+Module 02 đóng vai trò là "Bộ điều tiết" (Processing Layer). Nó chịu trách nhiệm 
+chuyển đổi dữ liệu từ kho lưu trữ thô (Raw) sang bảng dữ liệu nóng (Realtime), 
+đồng thời liên tục cập nhật các chỉ số tương tác để phục vụ phân tích xu hướng.
 
 Mục tiêu:
-- Xây dựng pipeline dữ liệu 2 tầng:
-    + Raw storage (lưu trữ lâu dài)
-    + Realtime storage (xử lý nhanh)
-- Theo dõi sự thay đổi của bài viết theo thời gian
-- Duy trì tập dữ liệu kích thước cố định (sliding window)
-
-----------------------------------------
-
-2. SYSTEM ARCHITECTURE
-----------------------------------------
-
-          [Reddit API]
-                ↓
-           [Fetcher]
-                ↓
-        -------------------
-        |                 |
-   [Raw Storage]   [Realtime Storage]
-        |                 ↓
-        |          [Updater Loop]
-        |                 ↓
-        |         [Sliding Window]
-        -------------------
-
-----------------------------------------
-
-3. DATABASE DESIGN
-----------------------------------------
-
-Database: reddit_db
-
-Collections:
-
-3.1 posts_raw
-- Lưu toàn bộ dữ liệu lịch sử
-- Không bị xóa
-- Dùng cho phân tích offline
-
-3.2 posts_realtime
-- Chỉ chứa WINDOW_SIZE bài gần nhất
-- Luôn được cập nhật
-- Dùng cho realtime processing
-
-Index:
-- id (unique) trên posts_realtime
-
-----------------------------------------
-
-4. CONFIGURATION
-----------------------------------------
-
-SUBREDDIT:
-- Chủ đề cần theo dõi
-
-WINDOW_SIZE:
-- Số lượng bài giữ trong realtime
-
-UPDATE_INTERVAL:
-- Chu kỳ cập nhật (giây)
-
-----------------------------------------
-
-5. COMPONENTS
-----------------------------------------
-
-5.1 Fetcher (fetch_new_posts)
-----------------------------------------
-- Gọi API:
-  https://www.reddit.com/r/{subreddit}/new.json
-
-- Trả về danh sách bài viết mới
-
-- Xử lý lỗi:
-    + HTTP != 200 → return []
-    + Exception → return []
-
-----------------------------------------
-
-5.2 Formatter (format_post)
-----------------------------------------
-Chuyển dữ liệu Reddit → MongoDB document
-
-Fields:
-- id
-- subreddit
-- title
-- content
-- score
-- num_comments
-- created_utc
-- updated_at
-- payload (full JSON)
-
-----------------------------------------
-
-5.3 Init Load (init_load)
-----------------------------------------
-Chức năng:
-- Khởi tạo realtime từ raw
-
-Cơ chế:
-- Lấy WINDOW_SIZE bài mới nhất từ posts_raw
-- Insert vào posts_realtime
-
-Mục đích:
-- Tránh phải crawl lại từ đầu
-- Khởi động nhanh hệ thống
-
-----------------------------------------
-
-5.4 Update Existing (update_existing)
-----------------------------------------
-Chức năng:
-- Cập nhật trạng thái bài viết realtime
-
-Cơ chế:
-- Lấy tất cả id từ posts_realtime
-- Gọi API:
-  https://www.reddit.com/comments/{id}.json
-
-- Update:
-    score
-    num_comments
-    updated_at
-
-Ý nghĩa:
-- Theo dõi sự thay đổi theo thời gian
-
-----------------------------------------
-
-5.5 Add New Posts (add_new_posts)
-----------------------------------------
-Chức năng:
-- Thêm bài mới vào hệ thống
-
-Cơ chế:
-- Fetch posts mới
-- Nếu chưa tồn tại trong realtime:
-    → insert vào posts_realtime
-
-- Đồng thời:
-    → lưu vào posts_raw bằng upsert
-
-Upsert:
-- Nếu chưa có → insert
-- Nếu đã có → giữ nguyên
-
-----------------------------------------
-
-5.6 Sliding Window (enforce_window)
-----------------------------------------
-Chức năng:
-- Giữ số lượng bài realtime <= WINDOW_SIZE
-
-Cơ chế:
-- Nếu vượt:
-    → sort theo created_utc (tăng dần)
-    → xóa bài cũ nhất
-
-----------------------------------------
-
-6. WORKFLOW
-----------------------------------------
-
-Bước 1: Start chương trình
-Bước 2: Kết nối MongoDB
-
-Bước 3:
-    Nếu posts_realtime rỗng:
-        → init_load()
-
-Bước 4: Loop vô hạn:
-
-    UPDATE CYCLE:
-
-    1. update_existing()
-    2. add_new_posts()
-    3. enforce_window()
-
-    4. In kích thước realtime
-    5. Sleep UPDATE_INTERVAL
-
-----------------------------------------
-
-7. DATA FLOW
-----------------------------------------
-
-Reddit → Fetch → Format → Raw + Realtime
-Realtime → Update → Realtime
-Realtime → Clean → Realtime
-
-----------------------------------------
-
-8. ERROR HANDLING
-----------------------------------------
-
-- HTTP error → bỏ qua request
-- Duplicate key → bỏ qua insert
-- Network error → catch và continue
-
-----------------------------------------
-
-9. PERFORMANCE CHARACTERISTICS
-----------------------------------------
-
-Time Complexity:
-- O(n) mỗi cycle (n = WINDOW_SIZE)
-
-Network Bound:
-- Phụ thuộc Reddit API
-
-Database Operations:
-- insert_one
-- update_one
-- delete_many
-- upsert
-
-----------------------------------------
-
-10. FEATURES
-----------------------------------------
-
-- Dual storage (raw + realtime)
-- Sliding window realtime
-- Auto update score/comment
-- Không trùng dữ liệu (upsert)
-- Khởi động nhanh từ raw
-
-----------------------------------------
-
-11. USE CASES
-----------------------------------------
-
-- Realtime dashboard
-- Tracking trending posts
-- Time-series analysis
-- Streaming simulation
-- AI training pipeline
-
-----------------------------------------
-
-12. DESIGN PATTERN
-----------------------------------------
-
-- Lambda Architecture (simplified):
-    + Batch layer → posts_raw
-    + Speed layer → posts_realtime
-
-- Polling-based streaming
-
-----------------------------------------
-
-13. SUMMARY
-----------------------------------------
-
-Module 2 là hệ thống xử lý realtime sử dụng polling để 
-cập nhật dữ liệu Reddit, kết hợp lưu trữ hai tầng (raw 
-và realtime), đồng thời duy trì sliding window nhằm đảm 
-bảo dữ liệu luôn mới, nhất quán và có kích thước ổn định.
-
-========================================
-END OF DOCUMENT
-========================================
+- Duy trì tập dữ liệu "nóng" với kích thước cố định (Sliding Window).
+- Cập nhật biến động Score/Comments theo thời gian thực.
+- Tối ưu hóa số lượng Request để tránh bị chặn bởi Reddit API.
+
+-------------------------------
+2. SYSTEM ARCHITECTURE (STREAMING)
+-------------------------------
+[posts_raw] ───(Sync)──→ [posts_realtime] 
+                              ↓
+                      [Async Update Loop] ←── [Reddit API]
+                              ↓
+                      [Sliding Window Cleanup]
+                              ↓
+                      [Ready for Module 04/05]
+
+
+
+-------------------------------
+3. DATABASE DESIGN (reddit_db)
+-------------------------------
+
+3.1 posts_raw (Input Source)
+- Chứa dữ liệu gốc từ Module 01.
+- Fields quan trọng: id, created_utc, type: "post".
+
+3.2 posts_realtime (Buffer Storage)
+- Chỉ chứa tối đa WINDOW_SIZE (500) bài viết mới nhất.
+- Bổ sung trường: updated_at (thời điểm cập nhật cuối).
+- Index: id (unique), created_utc (desc).
+
+-------------------------------
+4. MAIN COMPONENTS & LOGIC
+-------------------------------
+
+4.1 Sync Engine (sync_new_from_raw)
+- Cơ chế: So sánh created_utc của bài mới nhất trong Realtime với bảng Raw.
+- Chức năng: Tự động nạp bài mới từ Raw sang Realtime mà không cần crawl lại.
+
+4.2 Adaptive Updater (update_existing_realtime)
+- Chiến thuật: Chỉ cập nhật bài viết trong "vùng nóng" (< 12 giờ tuổi).
+- Cơ chế Async: Sử dụng Semaphore (limit=3) để gửi request song song nhưng 
+  vẫn đảm bảo an toàn cho IP.
+- Trình tự: Lấy ID -> Gọi API -> Cập nhật Score & Num_comments.
+
+4.3 Window Manager (enforce_window)
+- Chức năng: Giữ kích thước bảng Realtime ổn định.
+- Hành vi: Nếu count > 500, xóa N bài viết có created_utc cũ nhất.
+
+-------------------------------
+5. CONFIGURATION PARAMETERS
+-------------------------------
+- WINDOW_SIZE: 500 (Số lượng bài viết tối đa để Dashboard chạy mượt).
+- UPDATE_INTERVAL: 60s (Chu kỳ quét biến động).
+- MAX_CONCURRENT_API: 3 (Giới hạn luồng song song để né lỗi 429).
+- TIME_THRESHOLD: 12h (Thời gian tối đa một bài viết được ưu tiên cập nhật).
+
+-------------------------------
+6. ERROR HANDLING & RESILIENCE
+-------------------------------
+- Rate Limit (429): Khi gặp lỗi chặn, hệ thống tự động skip bài đó và nghỉ 
+  ngơi (Jitter) trước khi tiếp tục.
+- Data Consistency: Sử dụng $set trong update_one để chỉ cập nhật các trường 
+  biến động, giữ nguyên các trường cố định (title, author).
+- Connection Recovery: Tự động kết nối lại MongoDB nếu gặp sự cố mạng.
+
+-------------------------------
+7. PERFORMANCE CHARACTERISTICS
+-------------------------------
+- I/O Bound: Phần lớn thời gian chờ là phản hồi từ Reddit API.
+- Memory: Thấp, do chỉ xử lý batch 100-200 bài mỗi chu kỳ.
+- Latency: Độ trễ cập nhật tối đa là bằng UPDATE_INTERVAL.
+
+-------------------------------
+8. SUMMARY
+----------
+Module 02 là một Speed Layer trong kiến trúc Lambda tối giản, đảm nhận việc 
+làm tươi dữ liệu và duy trì một Window dữ liệu đủ nhỏ để các module 
+Analytics (04) và Dashboard (05) truy vấn với tốc độ dưới 100ms.
+
+==================================================
+END OF MODULE 02 SPECIFICATION
+==================================================

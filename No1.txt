@@ -1,190 +1,93 @@
-===============================
-REDDIT CRAWLER SYSTEM SPECIFICATION
-===============================
+==================================================
+MODULE 01: ASYNC DATA INGESTION SPECIFICATION
+==================================================
 
 1. OVERVIEW
 -----------
-Hệ thống là một crawler bất đồng bộ (asynchronous crawler) dùng để thu thập dữ liệu từ Reddit thông qua JSON endpoint và lưu vào MongoDB.
+Module 01 là thành phần đầu phễu (Ingestion Layer) của hệ thống. Đây là một crawler 
+bất đồng bộ hiệu suất cao, chịu trách nhiệm thu thập dữ liệu thô từ Reddit API 
+và lưu trữ phân cấp vào MongoDB.
 
 Mục tiêu:
-- Thu thập bài viết từ nhiều subreddit
-- Lưu trữ dữ liệu phục vụ phân tích (NLP, AI, thống kê)
+- Thu thập bài viết (Posts) và bình luận (Comments) đồng thời.
+- Phẳng hóa dữ liệu (Data Flattening) để tối ưu cho các module phân tích sau.
+- Đảm bảo tính toàn vẹn và không trùng lặp dữ liệu.
 
 -------------------------------
-
-2. SYSTEM ARCHITECTURE
+2. SYSTEM ARCHITECTURE (MODULE 01)
 -------------------------------
-[Config File]
+[Target Subreddits] 
       ↓
-[Async Worker Loop]
-      ↓
-[HTTP Request → Reddit JSON]
-      ↓
-[Parse Data]
-      ↓
-[Save MongoDB]
+[Async HTTP Session (aiohttp)] 
+      ↓ 
+[Post Fetcher] ──→ [Comment Fetcher (Deep Dive)]
+      ↓                     ↓
+[Data Transformer]    [Data Transformer]
+      ↓                     ↓
+[MongoDB: posts_raw]  [MongoDB: comments_raw]
 
 -------------------------------
-
 3. MAIN COMPONENTS
 -------------------------------
 
-3.1 Config Loader
-- Đọc file cấu hình (.properties)
-- Cho phép thay đổi tham số runtime
+3.1 Async Crawler Engine
+- Sử dụng thư viện: asyncio, aiohttp.
+- Cơ chế: Non-blocking I/O giúp thực hiện hàng chục request cùng lúc mà không chờ đợi.
+- Giới hạn: Sử dụng Semaphore (limit=5) để kiểm soát tải tránh bị Reddit khóa IP.
 
-Input:
-- subreddits
-- target_posts
-- delay
-- mongo_uri
+3.2 Data Transformer (Flattening)
+- Chức năng: Chuyển đổi JSON phân cấp phức tạp của Reddit thành cấu trúc phẳng.
+- Fields (Post): id, subreddit, title, score, num_comments, created_utc, author.
+- Fields (Comment): id, post_id (FK), body, score, author, created_utc.
 
-Output:
-- Dictionary config
+3.3 Pagination Logic
+- Sử dụng tham số "after" từ Reddit JSON.
+- Cơ chế: Lấy mã anchor từ batch cũ để gối đầu cho batch mới, cho phép crawl 
+  dữ liệu lịch sử lên đến hàng ngàn bài viết.
 
--------------------------------
-
-3.2 Async Worker
-- Chạy vòng lặp chính của hệ thống
-- Sử dụng asyncio để chạy nhiều request đồng thời
-- Giới hạn số request bằng Semaphore
-
--------------------------------
-
-3.3 HTTP Fetch (Crawler Engine)
-- Gửi request đến Reddit:
-  https://www.reddit.com/r/{subreddit}/new.json
-
-- Có User-Agent giả để tránh bị block
+3.4 Deep-Dive Comment Extraction
+- Sau khi lấy được Post ID, module tự động gửi thêm request đến endpoint:
+  https://www.reddit.com/comments/{post_id}.json
+- Mục đích: Thu thập dữ liệu thảo luận phục vụ phân tích NLP/Sentiment.
 
 -------------------------------
-
-3.4 Pagination
-- Reddit trả về trường "after"
-- Dùng để lấy batch dữ liệu tiếp theo
-
-Ví dụ:
-- Request 1 → after = abc
-- Request 2 → dùng after=abc
-
-Giúp:
-- Không bị lặp dữ liệu
-- Crawl được số lượng lớn (>10k)
+4. DATABASE LAYER (STORAGE STRATEGY)
+-------------------------------
+- Database: reddit_db
+- Collections: posts_raw, comments_raw.
+- Cơ chế: Upsert (Update if exists, Insert if new) dựa trên trường "id".
+- Indexing: 
+    + Unique Index trên "id" cho cả 2 bảng.
+    + Index trên "post_id" (bảng comment) để hỗ trợ truy vấn kết hợp (Join-like).
 
 -------------------------------
-
-3.5 Data Processing
-- Parse JSON thành dữ liệu có cấu trúc
-
-Fields:
-- id: ID bài viết
-- subreddit: tên subreddit
-- title: tiêu đề
-- content: nội dung
-- score: điểm vote
-- num_comments: số comment
-- created_utc: thời gian tạo
+5. RATE CONTROL & SAFETY
+-------------------------------
+- User-Agent Rotation: Thay đổi chuỗi nhận diện trình duyệt ngẫu nhiên.
+- Random Jitter: Nghỉ từ 1.0s - 2.5s giữa các batch bài viết.
+- Error Handling: 
+    + 429 (Too Many Requests): Tự động nghỉ 30s-60s và retry.
+    + 403 (Forbidden): Cảnh báo kiểm tra lại User-Agent hoặc Proxy.
 
 -------------------------------
-
-3.6 Database Layer (MongoDB)
-- Lưu dữ liệu bằng cơ chế upsert
-
-Cú pháp:
-update_one(filter, data, upsert=True)
-
-Hành vi:
-- Nếu chưa tồn tại → insert
-- Nếu đã tồn tại → update
-
-Ưu điểm:
-- Tránh trùng dữ liệu
-- Đảm bảo tính toàn vẹn
+6. WORKFLOW (MODULE 01)
+-------------------------------
+Bước 1: Khởi tạo kết nối MongoDB và Session Async.
+Bước 2: Chọn ngẫu nhiên Subreddit từ danh sách cấu hình.
+Bước 3: Gửi request lấy danh sách bài viết (Hot/New).
+Bước 4: Với mỗi bài viết nhận được:
+    - Lưu thông tin Post vào bảng posts_raw.
+    - Kích hoạt tiến trình con lấy Comments và lưu vào bảng comments_raw.
+Bước 5: Lấy mã "after", nghỉ ngắn và lặp lại vòng lặp.
 
 -------------------------------
-
-3.7 Rate Control
-- Sử dụng delay ngẫu nhiên
-- Giới hạn số request đồng thời
-
-Giúp tránh:
-- HTTP 429 (Too Many Requests)
-- HTTP 403 (Forbidden)
-
+7. FEATURES & ADVANTAGES
 -------------------------------
+- High Concurrency: Tốc độ thu thập nhanh gấp 5-10 lần crawler thông thường.
+- Data Separation: Tách biệt Post/Comment giúp Module 02 và Module 04 chạy nhẹ hơn.
+- Robustness: Chống trùng lặp tuyệt đối nhờ Unique Index.
+- Real-time Ready: Cấu trúc dữ liệu sẵn sàng cho việc phân tích Trending ngay lập tức.
 
-4. WORKFLOW
--------------------------------
-
-Bước 1: Load config
-Bước 2: Kết nối MongoDB
-Bước 3: Khởi tạo session async
-Bước 4: Vòng lặp:
-
-    - Gửi request
-    - Nhận dữ liệu JSON
-    - Parse dữ liệu
-    - Lưu vào MongoDB
-    - Cập nhật pagination (after)
-    - Sleep
-
--------------------------------
-
-5. STOP CONDITION
--------------------------------
-
-Hệ thống dừng khi:
-total_posts >= target_posts
-
--------------------------------
-
-6. RISKS AND HANDLING
--------------------------------
-
-403 Forbidden:
-- Nguyên nhân: bị chặn
-- Giải pháp: dùng User-Agent
-
-429 Too Many Requests:
-- Nguyên nhân: request quá nhanh
-- Giải pháp: delay + semaphore
-
-Duplicate Data:
-- Nguyên nhân: crawl trùng
-- Giải pháp: upsert
-
-Request Error:
-- Nguyên nhân: mạng hoặc server
-- Giải pháp: retry + sleep
-
--------------------------------
-
-7. FEATURES
--------------------------------
-
-- Asynchronous (nhanh)
-- Pagination (crawl lớn)
-- Không trùng dữ liệu
-- Config động
-- Dễ mở rộng
-
--------------------------------
-
-8. USE CASES
--------------------------------
-
-- Thu thập dữ liệu NLP
-- Phân tích sentiment
-- Training AI
-- Data pipeline
-
--------------------------------
-
-9. SUMMARY
--------------------------------
-
-Hệ thống là một crawler bất đồng bộ sử dụng asyncio để thu thập dữ liệu từ Reddit thông qua JSON endpoint, áp dụng cơ chế phân trang và kiểm soát tốc độ truy vấn, đồng thời lưu trữ dữ liệu vào MongoDB với cơ chế upsert nhằm đảm bảo tính toàn vẹn và tránh trùng lặp dữ liệu.
-
-===============================
-END OF DOCUMENT
-===============================
+==================================================
+END OF MODULE 01 SPECIFICATION
+==================================================

@@ -1,141 +1,106 @@
-import time
-import threading
-from pymongo import MongoClient
-from datetime import datetime
+import asyncio
+import random
+import sys
+from motor.motor_asyncio import AsyncIOMotorClient
+from datetime import datetime, timezone
 
-# ================= CONFIG =================
-MODE = "fast"  # fast | timeline | multi
-SOURCE = "realtime"  # raw | realtime
+# ================= CẤU HÌNH (CONFIG) =================
+MODE = "timeline"       # timeline | fast
+SPEED = 10              # Gấp 10 lần tốc độ thực tế
+FETCH_INTERVAL = 15     # Cập nhật đợt mới sau mỗi 15s
 
-SPEED = 10
-BATCH_SIZE = 100
-WORKERS = 10
+# ĐỊA CHỈ PHẢI KHỚP VỚI COMPASS
+MONGO_URI = "mongodb://localhost:27017/"
+DB_NAME = "reddit_db"        # Sửa lại cho khớp ảnh Compass
+RT_COL = "posts_realtime" 
 
-# ================= MONGO =================
-client = MongoClient("mongodb://localhost:27017/")
-db = client["reddit_db"]
+# ================= KẾT NỐI DB =================
+client = AsyncIOMotorClient(MONGO_URI)
+db = client[DB_NAME]
+rt_collection = db[RT_COL]
 
-raw_collection = db["posts_raw"]
-rt_collection = db["posts_realtime"]
-
-collection = rt_collection if SOURCE == "realtime" else raw_collection
-
-
-# ================= FORMAT EVENT =================
+# ================= ĐỊNH DẠNG SỰ KIỆN =================
 def format_event(doc):
     return {
-        "event_type": "REPLAY_POST",
+        "event_type": "TREND_SIGNAL",
         "id": doc.get("id"),
         "subreddit": doc.get("subreddit"),
-        "score": doc.get("score") or doc.get("raw", {}).get("score"),
-        "num_comments": doc.get("num_comments") or doc.get("raw", {}).get("num_comments"),
+        "title": doc.get("title"),
+        "score": doc.get("score", 0),
+        "num_comments": doc.get("num_comments", 0),
         "created_utc": doc.get("created_utc"),
-        "timestamp": datetime.utcnow()
+        "replay_at": datetime.now(timezone.utc)
     }
 
+async def emit_event(event):
+    """Giả lập đẩy dữ liệu vào luồng phân tích của Module 04"""
+    sys.stdout.write(
+        f"\r📡 [REPLAY] {event['replay_at'].strftime('%H:%M:%S')} | "
+        f"r/{event['subreddit']} | 👍 {event['score']} | 💬 {event['num_comments']}          "
+    )
+    sys.stdout.flush()
 
-# ================= SEND =================
-def send_event(event):
-    print(f"📡 {event['id']} | 👍 {event['score']} | 💬 {event['num_comments']}")
-
-
-# ================= FAST =================
-def replay_fast():
-    print("🚀 FAST REPLAY START")
-
-    cursor = collection.find().batch_size(BATCH_SIZE)
-
-    count = 0
-
-    for doc in cursor:
-        event = format_event(doc)
-        send_event(event)
-        count += 1
-
-    print(f"🔥 DONE FAST | TOTAL: {count}")
-
-
-# ================= TIMELINE =================
-def replay_timeline():
-    print("⏱️ TIMELINE REPLAY START")
-
-    docs = list(collection.find().sort("created_utc", 1))
-
+# ================= CHẾ ĐỘ TIMELINE =================
+async def replay_timeline():
+    print(f"⏱️ [Timeline] Đang quét 50 bài mới nhất từ {RT_COL}...")
+    
+    # Lấy 50 bài mới nhất để replay nhịp độ thực tế
+    cursor = rt_collection.find().sort("created_utc", 1).limit(50)
+    docs = await cursor.to_list(length=50)
+    
     if not docs:
-        print("❌ No data")
+        print("⚠️ Kho Realtime đang trống. Hãy đợi Module 02 nạp hàng!")
         return
 
-    start_time = docs[0]["created_utc"]
+    last_event_time = docs[0]["created_utc"]
 
     for doc in docs:
         event_time = doc["created_utc"]
-        delay = (event_time - start_time) / SPEED
+        # Tính wait_time, giới hạn tối đa 2s để tránh bị treo nếu data quá thưa
+        diff = (event_time - last_event_time) / SPEED
+        wait_time = min(max(0, diff), 2.0) 
 
-        time.sleep(max(delay, 0))
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
         event = format_event(doc)
-        send_event(event)
+        await emit_event(event)
+        last_event_time = event_time
+    print("\n✅ Đã phát lại xong đợt này.")
 
-        start_time = event_time
+# ================= CHẾ ĐỘ FAST =================
+async def replay_fast():
+    print("🚀 [Fast] Đang xả dữ liệu tốc độ cao...")
+    cursor = rt_collection.find().sort("created_utc", -1).limit(50)
+    docs = await cursor.to_list(length=50)
+    for doc in docs:
+        event = format_event(doc)
+        await emit_event(event)
+        await asyncio.sleep(0.1) # Xả nhanh nhưng vẫn nghỉ để ko treo CPU
+    print("\n✅ Xả xong.")
 
-    print("🔥 DONE TIMELINE")
-
-
-# ================= MULTI THREAD =================
-def replay_multithread():
-    print("⚡ MULTI-THREAD REPLAY START")
-
-    docs = list(collection.find())
-    total = len(docs)
-
-    print("TOTAL:", total)
-
-    def worker(chunk):
-        for doc in chunk:
-            event = format_event(doc)
-            send_event(event)
-
-    chunk_size = max(1, total // WORKERS)
-    threads = []
-
-    for i in range(WORKERS):
-        start = i * chunk_size
-        end = start + chunk_size
-        chunk = docs[start:end]
-
-        t = threading.Thread(target=worker, args=(chunk,))
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
-
-    print("🔥 DONE MULTI")
-
-
-# ================= MAIN =================
-def run():
-    print("🎬 MODULE 03 — REPLAY START")
-
+# ================= RUN =================
+async def run():
+    print("🎬 MODULE 03: ASYNC REPLAY ENGINE STARTED")
+    
+    # Kiểm tra kết nối DB trước khi chạy
     try:
-        client.server_info()
-        print("✅ Mongo Connected")
+        await client.admin.command('ping')
+        print(f"🔗 Đã kết nối MongoDB: {DB_NAME}")
     except Exception as e:
-        print("❌ Mongo Error:", e)
+        print(f"❌ Lỗi kết nối: {e}")
         return
 
-    print(f"📦 SOURCE: {SOURCE}")
+    while True:
+        if MODE == "timeline":
+            await replay_timeline()
+        else:
+            await replay_fast()
+            
+        await asyncio.sleep(FETCH_INTERVAL)
 
-    if MODE == "fast":
-        replay_fast()
-
-    elif MODE == "timeline":
-        replay_timeline()
-
-    elif MODE == "multi":
-        replay_multithread()
-
-
-# ================= START =================
 if __name__ == "__main__":
-    run()
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        print("\n🛑 Dừng Replay.")

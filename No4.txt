@@ -1,194 +1,93 @@
-🚀 MODULE No.04 — ANALYTICS & PREDICTION ENGINE
-
 ==================================================
-1. MỤC TIÊU
-==================================================
-Module này có nhiệm vụ:
-
-- Phân tích dữ liệu Reddit trong 24 giờ gần nhất
-- Xác định:
-  + Chủ đề đang được quan tâm nhất
-  + Bài viết trending nhất
-- Dự đoán:
-  + Chủ đề sẽ hot tiếp theo
-  + Bài viết có khả năng trở thành trending
-
-Đây là tầng xử lý thông minh của hệ thống.
-
-
-==================================================
-2. INPUT
-==================================================
-Nguồn dữ liệu:
-
-- Collection: posts_realtime hoặc posts_raw
-- Database: MongoDB
-
-Dữ liệu đầu vào gồm các trường chính:
-- id
-- subreddit
-- title
-- score
-- num_comments
-- created_utc
-- timestamp (datetime)
-
-
-==================================================
-3. PHẠM VI PHÂN TÍCH
-==================================================
-Chỉ sử dụng dữ liệu trong 24 giờ gần nhất.
-
-Điều kiện lọc:
-timestamp >= current_time - 24h
-
-Mục đích:
-- Loại bỏ dữ liệu cũ
-- Tập trung vào xu hướng hiện tại
-
-
-==================================================
-4. CHỨC NĂNG PHÂN TÍCH (ANALYTICS)
+MODULE 04: ANALYTICS & PREDICTION ENGINE SPEC
 ==================================================
 
-4.1. HOT TOPIC (CHỦ ĐỀ NỔI BẬT)
+1. OVERVIEW
+-----------
+Module 04 là "Bộ não" (Intelligence Layer) của hệ thống. Nó thực hiện các phép 
+toán tập hợp (Aggregation) phức tạp trên dữ liệu nóng để biến các con số 
+vô hồn thành các chỉ số xu hướng có giá trị cao.
 
 Mục tiêu:
-- Tìm subreddit có tổng tương tác cao nhất
+- Xác định thực trạng: Cái gì đang HOT nhất bây giờ?
+- Dự báo tương lai: Cái gì có tiềm năng bùng nổ (Viral) tiếp theo?
+- Cung cấp dữ liệu tinh lọc cho Dashboard và API.
 
-Cách tính:
-topic_score = tổng(score + num_comments)
+-------------------------------
+2. INPUT DATA (POSTS_REALTIME)
+-------------------------------
+Nguồn dữ liệu: reddit_db.posts_realtime (Dữ liệu đã được Module 02 làm sạch).
+Điều kiện lọc (Time-window): 
+- posts.created_utc >= (now - 24 hours).
+- Loại bỏ các bài viết rác hoặc bài viết có tương tác bằng 0.
 
-Quy trình:
-1. Lọc dữ liệu 24h
-2. Nhóm theo subreddit
-3. Tính tổng score và comment
-4. Sắp xếp giảm dần
-5. Lấy top N
+-------------------------------
+3. CÁC THUẬT TOÁN CỐT LÕI (ALGORITHMS)
+-------------------------------
 
+3.1 Hot Topic Analysis (Phân tích chủ đề nổi bật)
+- Công thức: Hotness_Index = Active_Posts * Avg_Score
+- Ý nghĩa: Một subreddit được coi là Hot khi nó có mật độ bài viết mới cao 
+  với lượng Upvote trung bình ổn định.
 
---------------------------------------------------
+3.2 Trending Post Velocity (Gia tốc xu hướng)
+Sử dụng thuật toán suy giảm theo thời gian (Time-decay):
+  
+  Trending_Score = (Score + Comments * 2.5) / (Age_hours + 2)^1.8
 
-4.2. TRENDING POST (BÀI VIẾT HOT)
+- Trọng số 2.5: Ưu tiên thảo luận (Engagement) hơn là lượt xem (Upvotes).
+- Gravity 1.8: Đảm bảo các bài viết cũ sẽ nhanh chóng "nguội" đi để nhường 
+  chỗ cho các bài viết mới hơn.
 
-Mục tiêu:
-- Tìm bài viết có độ hot cao nhất tại thời điểm hiện tại
+-------------------------------
+4. CHỨC NĂNG DỰ ĐOÁN (PREDICTION LOGIC)
+-------------------------------
 
-Cách tính:
-trending_score = (score + num_comments * 2) / (age_hours + 2)
+4.1 Viral Potential Prediction (Dự báo bùng nổ)
+- Công thức: Predict_Score = (Score + Comments * 2.5) / (Age_hours + 1)
+- Điểm khác biệt: Mẫu số (Age + 1) ít khắt khe hơn so với Trending, giúp 
+  phát hiện các bài viết vừa đăng (< 1h) nhưng đã có lượng tương tác đột biến.
 
-Trong đó:
-- age_hours = thời gian từ lúc đăng (giờ)
+4.2 Subreddit Growth Trend (Dự báo chủ đề tăng trưởng)
+- Cơ chế: So sánh mật độ bài viết giữa (12h gần nhất) và (12h trước đó).
+- Chỉ số: Nếu Tỉ lệ (New_Posts / Old_Posts) > 1.5, subreddit đó được gắn 
+  nhãn "Rising Topic".
 
-Ý nghĩa:
-- Bài mới + nhiều tương tác → điểm cao
-- Bài cũ → giảm dần
+-------------------------------
+5. SYSTEM ARCHITECTURE (MODULE 04)
+-------------------------------
+[posts_realtime]
+      ↓
+[MongoDB Aggregation Pipeline]
+      ↓
+   ├── $match: Lọc 24h & dữ liệu hợp lệ
+   ├── $addFields: Tính Age_hours & Trending_Score
+   ├── $group: Nhóm theo Subreddit để tính Hotness_Index
+   ├── $sort: Sắp xếp theo Velocity giảm dần
+      ↓
+[Result Set: Top N Trending & Hot Topics]
 
+[Image of a data processing pipeline for real-time analytics]
 
-==================================================
-5. CHỨC NĂNG DỰ ĐOÁN (PREDICTION)
-==================================================
+-------------------------------
+6. OUTPUT SPECIFICATION
+-------------------------------
+Hệ thống trả về 4 danh mục kết quả:
+1. Top 10 Trending Posts: Các bài viết đang "thống trị" bảng xếp hạng.
+2. Top 5 Hot Subreddits: Các cộng đồng sôi động nhất.
+3. Emerging Posts: Các bài viết có gia tốc (Velocity) tăng nhanh nhất trong 15 phút.
+4. Active Rate: Tần suất bài viết mới mỗi phút trên toàn hệ thống.
 
-5.1. DỰ ĐOÁN HOT TOPIC
+-------------------------------
+7. PERFORMANCE & SCALABILITY
+-------------------------------
+- Tối ưu hóa: Thực hiện tính toán trực tiếp trên RAM của MongoDB (In-memory).
+- Tần suất: Chạy mỗi 60-120 giây một lần để không gây tải cho Database.
+- Khả năng mở rộng: Có thể tích hợp thêm thư viện NLP (NLTK/SpaCy) để phân tích 
+  cảm xúc (Sentiment) trong các chu kỳ nâng cấp tiếp theo.
 
-Mục tiêu:
-- Xác định chủ đề đang tăng trưởng nhanh nhất
-
-Cách tính:
-growth_score = tổng( (score + num_comments) / (age_hours + 1) )
-
-Quy trình:
-1. Lọc dữ liệu 24h
-2. Tính age_hours cho từng bài
-3. Nhóm theo subreddit
-4. Tính tổng growth_score
-5. Sắp xếp giảm dần
-
-
---------------------------------------------------
-
-5.2. DỰ ĐOÁN TRENDING POST
-
-Mục tiêu:
-- Tìm bài viết có khả năng trở thành trending
-
-Cách tính:
-predict_score = (score + num_comments * 2) / (age_hours + 1)
-
-Ý nghĩa:
-- Bài mới + đang tăng nhanh → điểm cao
-
-
-==================================================
-6. OUTPUT
-==================================================
-
-Module trả về các kết quả:
-
-- Danh sách Top N chủ đề nổi bật
-- Danh sách Top N bài viết trending
-- Danh sách Top N chủ đề có xu hướng tăng trưởng
-- Danh sách Top N bài viết có khả năng trend
-
-(Không trả JSON trong code, chỉ dùng trong API layer nếu cần)
-
-
-==================================================
-7. VAI TRÒ TRONG HỆ THỐNG
-==================================================
-
-Module này đóng vai trò:
-
-- Analytics Layer
-- Intelligence Layer
-
-Nó giúp:
-- Hiểu dữ liệu hiện tại
-- Dự đoán xu hướng tương lai
-
-
-==================================================
-8. LUỒNG HOẠT ĐỘNG
-==================================================
-
-MongoDB
-   ↓
-Filter 24h
-   ↓
-Analytics (Hot / Trending)
-   ↓
-Prediction (Growth / Predict)
-   ↓
-Output kết quả
-
-
-==================================================
-9. TÍNH CHẤT
-==================================================
-
-- Near Real-time
-- Dựa trên dữ liệu streaming (Module 02)
-- Có khả năng mở rộng (AI, ML)
-
-
-==================================================
-10. HƯỚNG NÂNG CẤP
-==================================================
-
-- Lưu snapshot theo thời gian để phân tích trend thật
-- Áp dụng Machine Learning
-- Phân tích sentiment (tích cực / tiêu cực)
-- Dashboard realtime
-- API phục vụ frontend
-
-
-==================================================
-11. KẾT LUẬN
-==================================================
-
-Module 04 là trung tâm phân tích và dự đoán của hệ thống:
-
-- Biến dữ liệu thô thành thông tin có giá trị
-- Giúp xác định xu hướng hiện tại và tương lai
-
-=> Đây là thành phần quan trọng nhất để nâng hệ thống lên mức "intelligent system"
+-------------------------------
+8. SUMMARY
+----------
+Module 04 nâng tầm hệ thống từ một Crawler thông thường trở thành một Intelligent 
+System.

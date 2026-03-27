@@ -1,190 +1,147 @@
-import requests
-import time
-from pymongo import MongoClient
-from datetime import datetime
+import asyncio
+import aiohttp
+import random
+import sys
+from datetime import datetime, timezone
+from motor.motor_asyncio import AsyncIOMotorClient
 
-# ================= CONFIG =================
-WINDOW_SIZE = 500
-UPDATE_INTERVAL = 60  # seconds
-USE_API_UPDATE = True  # bật/tắt update từ Reddit
+# ================= CẤU HÌNH (ĐÃ TỐI ƯU ĐỂ KHÔNG BỊ CHẶN) =================
+WINDOW_SIZE = 500          # Giữ tối đa 500 bài trong bảng Realtime
+UPDATE_INTERVAL = 5        # Nghỉ 5 giây mỗi chu kỳ (Né lỗi 429)
+MAX_CONCURRENT_API = 2     # Chỉ chạy 2 luồng song song (Né lỗi 403)
 
-# ================= MONGO =================
-client = MongoClient("mongodb://localhost:27017/")
-db = client["reddit_db"]
+MONGO_URI = "mongodb://localhost:27017/"
+DB_NAME = "reddit_db"
+RAW_COL = "posts_raw"
+RT_COL = "posts_realtime"
 
-raw_collection = db["posts"]
-rt_collection = db["posts_realtime"]
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
+]
 
-rt_collection.create_index("id", unique=True)
-rt_collection.create_index("created_utc")
-    
-# ================= HEADERS =================
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 realtime-bot/2.0"
-}
+def get_headers():
+    return {"User-Agent": random.choice(USER_AGENTS), "Accept": "application/json"}
 
+# Kết nối Database
+client = AsyncIOMotorClient(MONGO_URI)
+db = client[DB_NAME]
+raw_collection = db[RAW_COL]
+rt_collection = db[RT_COL]
 
-# ================= INIT LOAD =================
-def init_load():
-    print("🚀 INIT FROM RAW")
+# ================= 1. SYNC ÉP BUỘC (ĐỂ ĐUỔI KỊP MODULE 1) =================
+async def sync_new_from_raw():
+    """Lấy bài từ Raw sang Realtime dựa trên crawl_time (thời gian cào)"""
+    # Lấy bài mới nhất trong Realtime để làm mốc (dựa trên crawl_time của chính nó)
+    latest_doc = await rt_collection.find_one(sort=[("crawl_time", -1)])
+    latest_sync_time = latest_doc["crawl_time"] if latest_doc and "crawl_time" in latest_doc else None
 
-    raw_count = raw_collection.count_documents({})
-    print("📦 RAW COUNT:", raw_count)
-
-    docs = list(
-        raw_collection.find({
-            "created_utc": {"$exists": True, "$ne": None}
-        })
-        .sort("created_utc", -1)
-        .limit(WINDOW_SIZE)
-    )
-
-    inserted = 0
-
-    for doc in docs:
-        try:
-            raw = doc.get("raw", {})
-
-            rt_collection.update_one(
-                {"id": doc["id"]},
-                {"$set": {
-                    "id": doc["id"],
-                    "subreddit": doc.get("subreddit"),
-                    "created_utc": doc.get("created_utc"),
-                    "score": raw.get("score", 0),
-                    "num_comments": raw.get("num_comments", 0),
-                    "updated_at": datetime.utcnow()
-                }},
-                upsert=True
-            )
-            inserted += 1
-        except Exception as e:
-            print("❌ INIT ERROR:", e)
-
-    print("✅ INIT DONE:", inserted)
-
-
-# ================= SYNC FROM RAW =================
-def sync_new_from_raw():
-    print("📥 Sync new posts from RAW")
-
-    latest = rt_collection.find_one(sort=[("created_utc", -1)])
-    latest_time = latest["created_utc"] if latest else 0
-
-    new_docs = raw_collection.find({
-        "created_utc": {"$gt": latest_time}
-    }).sort("created_utc", -1)
+    # Tìm bài trong Raw có crawl_time mới hơn mốc đã sync
+    query = {"crawl_time": {"$gt": latest_sync_time}} if latest_sync_time else {}
+    cursor = raw_collection.find(query).sort("crawl_time", 1)
+    new_docs = await cursor.to_list(length=100)
 
     added = 0
-
     for doc in new_docs:
+        if not doc.get("title"): continue
+        
+        # Đồng bộ sang bảng Realtime
+        await rt_collection.update_one(
+            {"id": doc["id"]},
+            {"$set": {
+                "id": doc["id"],
+                "subreddit": doc.get("subreddit"),
+                "title": doc.get("title"),
+                "created_utc": doc.get("created_utc"),
+                "score": doc.get("score", 0),
+                "num_comments": doc.get("num_comments", 0),
+                "updated_at": datetime.now(timezone.utc),
+                "crawl_time": doc.get("crawl_time") # Lưu lại mốc để lần sau so sánh
+            }},
+            upsert=True
+        )
+        added += 1
+    
+    if added > 0:
+        print(f"📥 [Sync] Đã nạp +{added} bài viết mới từ Raw sang Realtime.")
+    else:
+        # Nếu không có bài mới theo mốc thời gian, kiểm tra tổng số lượng để chắc chắn
+        total_raw = await raw_collection.count_documents({})
+        total_rt = await rt_collection.count_documents({})
+        if total_rt < total_raw:
+            print(f"📡 Đang cưỡng ép đồng bộ... (Raw: {total_raw} | Realtime: {total_rt})")
+            cursor = raw_collection.find().sort("crawl_time", -1).limit(100)
+            all_recent = await cursor.to_list(length=100)
+            for d in all_recent:
+                await rt_collection.update_one({"id": d["id"]}, {"$set": d}, upsert=True)
+            print(f"✅ Đã ép đồng bộ xong.")
+
+# ================= 2. UPDATE CHỈ SỐ (REALTIME) =================
+async def fetch_updated_stats(session, sem, post_id):
+    url = f"https://www.reddit.com/comments/{post_id}.json?limit=1"
+    async with sem:
         try:
-            raw = doc.get("raw", {})
+            await asyncio.sleep(random.uniform(1.5, 3.0)) # Nghỉ né Bot detection
+            async with session.get(url, headers=get_headers(), timeout=12) as res:
+                if res.status == 200:
+                    data = await res.json()
+                    p_info = data[0]["data"]["children"][0]["data"]
+                    await rt_collection.update_one(
+                        {"id": post_id},
+                        {"$set": {
+                            "score": p_info.get("score", 0),
+                            "num_comments": p_info.get("num_comments", 0),
+                            "updated_at": datetime.now(timezone.utc)
+                        }}
+                    )
+                    return "OK"
+                return f"ERR_{res.status}"
+        except: return "FAIL"
 
-            rt_collection.update_one(
-                {"id": doc["id"]},
-                {"$set": {
-                    "id": doc["id"],
-                    "subreddit": doc.get("subreddit"),
-                    "created_utc": doc.get("created_utc"),
-                    "score": raw.get("score", 0),
-                    "num_comments": raw.get("num_comments", 0),
-                    "updated_at": datetime.utcnow()
-                }},
-                upsert=True
-            )
-            added += 1
-        except Exception as e:
-            print("❌ SYNC ERROR:", e)
+async def update_existing_realtime():
+    # Chỉ update 15 bài mới nhất để tránh bị Reddit chặn IP (429)
+    cursor = rt_collection.find().sort("created_utc", -1).limit(15)
+    docs = await cursor.to_list(length=15) 
+    if not docs: return
 
-    print("➕ Added from RAW:", added)
+    sem = asyncio.Semaphore(MAX_CONCURRENT_API)
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_updated_stats(session, sem, d["id"]) for d in docs]
+        results = await asyncio.gather(*tasks)
+    
+    success = results.count("OK")
+    print(f"🔄 [Update] Đã nhảy số cho {success}/15 bài đang hot.")
 
-
-# ================= UPDATE FROM API =================
-def update_existing():
-    if not USE_API_UPDATE:
-        return
-
-    print("🔄 Updating realtime posts (API)...")
-
-    docs = list(rt_collection.find({}, {"id": 1}))
-
-    for doc in docs:
-        post_id = doc["id"]
-
-        url = f"https://www.reddit.com/comments/{post_id}.json"
-
-        try:
-            res = requests.get(url, headers=HEADERS, timeout=10)
-
-            if res.status_code == 429:
-                print("⛔ RATE LIMIT → sleep 5s")
-                time.sleep(5)
-                continue
-
-            if res.status_code != 200:
-                continue
-
-            post_data = res.json()[0]["data"]["children"][0]["data"]
-
-            rt_collection.update_one(
-                {"id": post_id},
-                {
-                    "$set": {
-                        "score": post_data.get("score", 0),
-                        "num_comments": post_data.get("num_comments", 0),
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-        except Exception as e:
-            print("❌ UPDATE ERROR:", e)
-
-
-# ================= SLIDING WINDOW =================
-def enforce_window():
-    total = rt_collection.count_documents({})
-
-    if total <= WINDOW_SIZE:
-        return
-
+# ================= 3. GIỚI HẠN DỮ LIỆU =================
+async def enforce_window():
+    total = await rt_collection.count_documents({})
+    if total <= WINDOW_SIZE: return
     remove_count = total - WINDOW_SIZE
-
-    print(f"🧹 Removing {remove_count} old posts...")
-
-    old_posts = rt_collection.find().sort("created_utc", 1).limit(remove_count)
+    cursor = rt_collection.find({}, {"id": 1}).sort("created_utc", 1).limit(remove_count)
+    old_posts = await cursor.to_list(length=remove_count)
     ids = [p["id"] for p in old_posts]
+    await rt_collection.delete_many({"id": {"$in": ids}})
 
-    rt_collection.delete_many({"id": {"$in": ids}})
-
-
-# ================= MAIN LOOP =================
-def run():
-    print("🔥 MODULE 02 — REALTIME START")
-
-    try:
-        client.server_info()
-        print("✅ Mongo Connected")
-    except Exception as e:
-        print("❌ Mongo Error:", e)
-        return
-
-    # FORCE INIT để đảm bảo có data
-    init_load()
+# ================= MAIN =================
+async def run():
+    print("🔥 MODULE 02: REALTIME ENGINE...")
+    await rt_collection.create_index("id", unique=True)
+    await rt_collection.create_index("crawl_time")
 
     while True:
-        print("\n===== UPDATE CYCLE =====")
+        try:
+            await sync_new_from_raw()
+            await update_existing_realtime()
+            await enforce_window()
+            
+            print(f"✅ Chu kỳ hoàn tất lúc {datetime.now().strftime('%H:%M:%S')}. Nghỉ {UPDATE_INTERVAL}s...")
+            await asyncio.sleep(UPDATE_INTERVAL)
+        except Exception as e:
+            print(f"❌ Lỗi hệ thống: {e}")
+            await asyncio.sleep(10)
 
-        sync_new_from_raw()
-        update_existing()
-        enforce_window()
-
-        total = rt_collection.count_documents({})
-        print("📊 REALTIME SIZE:", total)
-
-        time.sleep(UPDATE_INTERVAL)
-
-
-# ================= START =================
 if __name__ == "__main__":
-    run()
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        print("\n🛑 Module 02 đã dừng.")

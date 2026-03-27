@@ -1,233 +1,94 @@
-========================================
-REDDIT REPLAY MODULE SPECIFICATION
-========================================
+==================================================
+MODULE 03: ASYNC REPLAY ENGINE SPECIFICATION
+==================================================
 
 1. OVERVIEW
-----------------------------------------
-Module Replay dùng để đọc dữ liệu đã crawl từ MongoDB 
-và phát lại (replay) theo nhiều chế độ khác nhau.
+-----------
+Module 03 đóng vai trò là lớp mô phỏng (Simulation Layer). Nó thực hiện việc đọc 
+dữ liệu tĩnh từ MongoDB và phát lại dưới dạng luồng sự kiện (Event Stream), 
+giúp kiểm thử phản ứng của hệ thống Analytics (Module 04) mà không cần 
+đợi dữ liệu thực từ Reddit.
 
 Mục tiêu:
-- Mô phỏng luồng dữ liệu realtime
-- Test pipeline xử lý dữ liệu (Kafka, AI, analytics)
-- Debug và kiểm tra dữ liệu đã crawl
+- Tái lập dòng chảy dữ liệu thực tế (Real-time Simulation).
+- Kiểm thử tải (Stress Test) và thông lượng (Throughput) của Pipeline.
+- Hỗ trợ Debug lỗi logic trong quá trình xử lý chuỗi thời gian (Time-series).
 
-----------------------------------------
-
+-------------------------------
 2. SYSTEM ARCHITECTURE
-----------------------------------------
-
-[MongoDB]
-     ↓
-[Data Reader]
-     ↓
-[Formatter]
-     ↓
-[Replay Engine]
-     ↓
-[Output Stream (print/log)]
-
-----------------------------------------
-
-3. CONFIGURATION
-----------------------------------------
-
-MODE:
-- fast      : phát nhanh toàn bộ dữ liệu
-- timeline  : phát theo thời gian thực (giả lập)
-- multi     : phát song song nhiều thread
-
-SPEED:
-- Tốc độ phát timeline (chia nhỏ thời gian delay)
-
-BATCH_SIZE:
-- Số document lấy mỗi lần từ MongoDB
-
-WORKERS:
-- Số thread chạy song song (multi-thread mode)
-
-----------------------------------------
-
-4. COMPONENTS
-----------------------------------------
-
-4.1 MongoDB Connection
-- Kết nối tới MongoDB local
-- Database: reddit_db
-- Collection: posts
-
-----------------------------------------
-
-4.2 Data Formatter (format_event)
-
-Chuyển dữ liệu MongoDB → Event chuẩn
-
-Input:
-- document từ MongoDB
-
-Output:
-{
-    event_type,
-    id,
-    subreddit,
-    title,
-    score,
-    num_comments,
-    created_utc,
-    timestamp
-}
-
-Mục đích:
-- Chuẩn hóa dữ liệu
-- Phục vụ stream processing
-
-----------------------------------------
-
-4.3 Event Sender (send_event)
-
-- Xuất dữ liệu ra console
-- Giả lập streaming system
-
-Output:
-📡 id | score | num_comments
-
-----------------------------------------
-
-5. REPLAY MODES
-----------------------------------------
-
-5.1 FAST REPLAY
-
-Mô tả:
-- Đọc toàn bộ dữ liệu từ MongoDB
-- Phát liên tục không delay
-
-Cơ chế:
-- Dùng cursor + batch_size
-- Loop từng document
-- Gửi event ngay lập tức
-
-Ưu điểm:
-- Rất nhanh
-- Phù hợp test throughput
-
-Nhược điểm:
-- Không mô phỏng realtime
-
-----------------------------------------
-
-5.2 TIMELINE REPLAY
-
-Mô tả:
-- Phát dữ liệu theo timeline thực
-
-Cơ chế:
-- Sort theo created_utc
-- Tính delay giữa các event:
-
-    delay = (event_time - start_time) / SPEED
-
-- Sleep trước khi phát event tiếp theo
-
-Ưu điểm:
-- Mô phỏng realtime chính xác
-- Phù hợp test streaming system
-
-Nhược điểm:
-- Chậm hơn fast mode
-
-----------------------------------------
-
-5.3 MULTI-THREAD REPLAY
-
-Mô tả:
-- Chạy nhiều thread song song
-
-Cơ chế:
-- Load toàn bộ dữ liệu vào list
-- Chia thành nhiều chunk
-- Mỗi thread xử lý một chunk
-
-chunk_size = total / WORKERS
-
-Ưu điểm:
-- Tăng tốc độ xử lý
-- Tận dụng CPU
-
-Nhược điểm:
-- Không đảm bảo thứ tự
-- Có thể conflict output
-
-----------------------------------------
-
-6. WORKFLOW
-----------------------------------------
-
-Bước 1: Start chương trình
-Bước 2: Kết nối MongoDB
-Bước 3: Kiểm tra kết nối (server_info)
-
-Bước 4: Chọn mode:
-
-    if MODE == "fast":
-        replay_fast()
-
-    if MODE == "timeline":
-        replay_timeline()
-
-    if MODE == "multi":
-        replay_multithread()
-
-Bước 5: Đọc dữ liệu → format → send
-
-----------------------------------------
-
-7. ERROR HANDLING
-----------------------------------------
-
-MongoDB connection error:
-- In ra lỗi và dừng chương trình
-
-Empty data:
-- Timeline mode sẽ báo "No data"
-
-----------------------------------------
-
-8. PERFORMANCE CHARACTERISTICS
-----------------------------------------
-
-Fast mode:
-- O(n)
-- I/O bound
-
-Timeline mode:
-- O(n)
-- Time dependent (sleep)
-
-Multi-thread mode:
-- O(n / workers)
-- CPU bound
-
-----------------------------------------
-
-9. USE CASES
-----------------------------------------
-
-- Test hệ thống streaming
-- Debug dữ liệu
-- Benchmark tốc độ xử lý
-- Demo pipeline dữ liệu
-
-----------------------------------------
-
-10. SUMMARY
-----------------------------------------
-
-Module Replay là một hệ thống phát lại dữ liệu từ MongoDB 
-theo nhiều chế độ (fast, timeline, multi-thread), giúp mô 
-phỏng luồng dữ liệu thực tế, kiểm thử hệ thống và đánh giá 
-hiệu năng xử lý dữ liệu.
-
-========================================
-END OF DOCUMENT
-========================================
+-------------------------------
+[MongoDB: posts_realtime] 
+           ↓
+[Async Data Cursor] 
+           ↓ 
+[Event Formatter (TREND_SIGNAL)] 
+           ↓ 
+[Replay Scheduler (Timeline/Fast Logic)]
+           ↓ 
+[Output Stream / Analyst Ingestor]
+
+
+
+-------------------------------
+3. CONFIGURATION PARAMETERS
+-------------------------------
+- MODE: 
+    + "timeline": Phát lại dựa trên chênh lệch created_utc (giả lập thực tế).
+    + "fast": Xả dữ liệu tối đa tốc độ (kiểm tra giới hạn hệ thống).
+- SPEED: Hệ số nhân tốc độ (Ví dụ: SPEED=10 nghĩa là 1 giờ dữ liệu phát trong 6 phút).
+- FETCH_INTERVAL: Chu kỳ làm mới danh sách bài viết từ DB (giây).
+- DB_NAME & RT_COL:reddit_db / posts_realtime.
+
+-------------------------------
+4. MAIN COMPONENTS
+-------------------------------
+
+4.1 Async Data Reader
+- Sử dụng Motor (AsyncIOMotorClient) để truy vấn không chặn.
+- Logic: Sort theo created_utc tăng dần để đảm bảo thứ tự thời gian.
+
+4.2 Replay Logic (The Scheduler)
+- Timeline Mode: 
+    + Tính toán: wait_time = (Current_Post_UTC - Last_Post_UTC) / SPEED.
+    + Giới hạn (Cap): wait_time được giới hạn tối đa 2.0s để tránh "treo" 
+      khi khoảng cách dữ liệu quá thưa.
+- Fast Mode: Sử dụng asyncio.sleep(0.01) để duy trì nhịp độ nhưng không gây 
+  tràn bộ đệm đầu ra.
+
+4.3 Event Emitter (format_event)
+- Gán nhãn event_type: "TREND_SIGNAL".
+- Chuẩn hóa các trường: id, subreddit, score, num_comments, created_utc.
+- Thêm trường replay_at: Thời điểm phát lại thực tế.
+
+-------------------------------
+5. WORKFLOW
+-----------
+Bước 1: Kết nối MongoDB và kiểm tra dữ liệu trong bảng posts_realtime.
+Bước 2: Tải Batch dữ liệu đầu tiên (ví dụ 50-100 bài mới nhất).
+Bước 3: Thực hiện vòng lặp phát tin:
+    - Nếu Timeline: Tính độ trễ và await asyncio.sleep().
+    - Nếu Fast: Phát liên tục.
+Bước 4: In thông tin ra Console (📡 [REPLAY] Subreddit | Score | Cmt).
+Bước 5: Sau khi hết Batch, nghỉ FETCH_INTERVAL rồi quay lại Bước 2.
+
+-------------------------------
+6. ERROR HANDLING & RESILIENCE
+-------------------------------
+- Empty Collection: Thông báo chờ dữ liệu từ Module 02 thay vì dừng chương trình.
+- Time Drift: Tự động điều chỉnh replay_at để đảm bảo luồng sự kiện không 
+  bị dồn ứ cục bộ.
+- Keyboard Interrupt: Đóng cursor và session an toàn khi người dùng nhấn Ctrl+C.
+
+-------------------------------
+7. PERFORMANCE & USE CASES
+-------------------------------
+- Throughput: Fast mode có khả năng xử lý >1000 events/giây.
+- Accuracy: Timeline mode đạt độ chính xác ~95% so với nhịp độ thực tế của Reddit.
+- Use Case: 
+    + Demo hệ thống cho khách hàng/giảng viên mà không cần mạng Internet.
+    + Kiểm tra thuật toán phát hiện Trend (Module 04) có bắt kịp bài viết 
+      vừa bùng nổ hay không.
+
+==================================================
+END OF MODULE 03 SPECIFICATION
+==================================================

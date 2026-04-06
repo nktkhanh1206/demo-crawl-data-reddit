@@ -5,7 +5,7 @@ from datetime import datetime
 from pymongo import MongoClient
 
 # ================= LOAD CONFIG =================
-def load_config(path="K:\\DataReddit\\demo-crawl-data-reddit\\config.properties"):
+def load_config(path="config.properties"):
     config = {}
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -51,11 +51,11 @@ def format_raw(post):
 # ================= SAVE =================
 def save(post, collection):
     try:
-        doc = format_raw(post)
+        # doc = format_raw(post)
 
         collection.update_one(
-            {"id": doc["id"]},
-            {"$set": doc},
+            {"id": post["id"]},
+            {"$set": post},
             upsert=True
         )
         return 1
